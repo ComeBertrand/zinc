@@ -1,0 +1,177 @@
+use std::path::PathBuf;
+
+use anyhow::Result;
+use clap::{Parser, Subcommand};
+
+mod client;
+
+#[derive(Parser)]
+#[command(name = "zinc", about = "Agent multiplexer for the terminal")]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Launch a new agent
+    Spawn {
+        /// Agent tool to use (e.g. claude, codex)
+        #[arg(long, default_value = "claude")]
+        agent: String,
+
+        /// Working directory for the agent
+        #[arg(long, default_value = ".")]
+        dir: PathBuf,
+
+        /// Agent ID (auto-generated if omitted)
+        #[arg(long)]
+        id: Option<String>,
+
+        /// Extra arguments passed to the agent command
+        #[arg(last = true)]
+        args: Vec<String>,
+    },
+
+    /// List all agents and their states
+    List {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Kill an agent
+    Kill {
+        /// Agent ID
+        id: String,
+    },
+
+    /// Stop all agents and shut down the daemon
+    Shutdown,
+
+    /// Check if the daemon is running
+    Status,
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let cli = Cli::parse();
+
+    match cli.command {
+        Commands::Spawn { agent, dir, id, args } => {
+            let dir = std::fs::canonicalize(&dir)
+                .map_err(|e| anyhow::anyhow!("invalid directory '{}': {}", dir.display(), e))?;
+            let mut client = client::Client::connect().await?;
+            let resp = client
+                .send(zinc_proto::Request::Spawn {
+                    provider: agent,
+                    dir,
+                    id,
+                    args,
+                })
+                .await?;
+            match resp {
+                zinc_proto::Response::Spawned { id } => {
+                    println!("Spawned agent: {}", id);
+                }
+                zinc_proto::Response::Error { message } => {
+                    eprintln!("Error: {}", message);
+                    std::process::exit(1);
+                }
+                _ => {}
+            }
+        }
+
+        Commands::List { json } => {
+            let mut client = client::Client::connect().await?;
+            let resp = client.send(zinc_proto::Request::List).await?;
+            match resp {
+                zinc_proto::Response::Agents { agents } => {
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&agents)?);
+                    } else if agents.is_empty() {
+                        println!("No agents running.");
+                    } else {
+                        println!(
+                            "{:<10} {:<10} {:<15} {:<40} {:>8}",
+                            "STATE", "AGENT", "ID", "DIRECTORY", "UPTIME"
+                        );
+                        for agent in agents {
+                            let dir = shorten_home(&agent.dir.display().to_string());
+                            println!(
+                                "{:<10} {:<10} {:<15} {:<40} {:>8}",
+                                agent.state,
+                                agent.provider,
+                                agent.id,
+                                dir,
+                                format_uptime(agent.uptime_secs),
+                            );
+                        }
+                    }
+                }
+                zinc_proto::Response::Error { message } => {
+                    eprintln!("Error: {}", message);
+                    std::process::exit(1);
+                }
+                _ => {}
+            }
+        }
+
+        Commands::Kill { id } => {
+            let mut client = client::Client::connect().await?;
+            let resp = client
+                .send(zinc_proto::Request::Kill { id: id.clone() })
+                .await?;
+            match resp {
+                zinc_proto::Response::Ok => println!("Killed agent: {}", id),
+                zinc_proto::Response::Error { message } => {
+                    eprintln!("Error: {}", message);
+                    std::process::exit(1);
+                }
+                _ => {}
+            }
+        }
+
+        Commands::Shutdown => {
+            let mut client = client::Client::connect().await?;
+            let resp = client.send(zinc_proto::Request::Shutdown).await?;
+            match resp {
+                zinc_proto::Response::Ok => println!("Daemon shutting down."),
+                zinc_proto::Response::Error { message } => {
+                    eprintln!("Error: {}", message);
+                    std::process::exit(1);
+                }
+                _ => {}
+            }
+        }
+
+        Commands::Status => match client::Client::try_connect().await? {
+            Some(_) => println!("Daemon is running."),
+            None => {
+                println!("Daemon is not running.");
+                std::process::exit(1);
+            }
+        },
+    }
+
+    Ok(())
+}
+
+fn shorten_home(path: &str) -> String {
+    if let Ok(home) = std::env::var("HOME") {
+        if let Some(rest) = path.strip_prefix(&home) {
+            return format!("~{}", rest);
+        }
+    }
+    path.to_string()
+}
+
+fn format_uptime(secs: u64) -> String {
+    if secs < 60 {
+        format!("{}s", secs)
+    } else if secs < 3600 {
+        format!("{}m", secs / 60)
+    } else {
+        format!("{}h{}m", secs / 3600, (secs % 3600) / 60)
+    }
+}

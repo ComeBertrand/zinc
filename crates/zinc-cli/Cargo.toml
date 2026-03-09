@@ -1,0 +1,17 @@
+[package]
+name = "zinc-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "zinc"
+path = "src/main.rs"
+
+[dependencies]
+zinc-proto = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+clap = { workspace = true }
+nix = { workspace = true }
+anyhow = { workspace = true }
