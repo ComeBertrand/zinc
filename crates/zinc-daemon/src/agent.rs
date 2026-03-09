@@ -76,7 +76,7 @@ impl Agent {
             let master = master.clone();
             let scrollback = scrollback.clone();
             std::thread::Builder::new()
-                .name(format!("pty-reader"))
+                .name("pty-reader".to_string())
                 .spawn(move || {
                     pty_reader_loop(master.as_raw_fd(), scrollback);
                 })

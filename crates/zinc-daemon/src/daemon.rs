@@ -92,10 +92,7 @@ async fn shutdown_signal(state: Arc<Mutex<DaemonState>>) {
 }
 
 /// Handle a single client connection (newline-delimited JSON request/response).
-async fn handle_connection(
-    stream: UnixStream,
-    state: Arc<Mutex<DaemonState>>,
-) -> Result<()> {
+async fn handle_connection(stream: UnixStream, state: Arc<Mutex<DaemonState>>) -> Result<()> {
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
     let mut line = String::new();

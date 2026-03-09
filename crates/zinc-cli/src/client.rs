@@ -45,8 +45,7 @@ impl Client {
                             continue;
                         }
                         Err(e) => {
-                            return Err(e)
-                                .context("failed to connect to daemon after starting it");
+                            return Err(e).context("failed to connect to daemon after starting it");
                         }
                     }
                 }

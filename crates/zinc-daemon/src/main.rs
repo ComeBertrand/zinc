@@ -1,9 +1,6 @@
 use anyhow::Result;
 use tracing_subscriber::EnvFilter;
-
-mod agent;
-mod daemon;
-mod scrollback;
+use zinc_daemon::daemon;
 
 #[tokio::main]
 async fn main() -> Result<()> {

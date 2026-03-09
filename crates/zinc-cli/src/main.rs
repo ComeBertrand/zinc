@@ -58,7 +58,12 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Spawn { agent, dir, id, args } => {
+        Commands::Spawn {
+            agent,
+            dir,
+            id,
+            args,
+        } => {
             let dir = std::fs::canonicalize(&dir)
                 .map_err(|e| anyhow::anyhow!("invalid directory '{}': {}", dir.display(), e))?;
             let mut client = client::Client::connect().await?;
@@ -173,5 +178,35 @@ fn format_uptime(secs: u64) -> String {
         format!("{}m", secs / 60)
     } else {
         format!("{}h{}m", secs / 3600, (secs % 3600) / 60)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_uptime() {
+        assert_eq!(format_uptime(0), "0s");
+        assert_eq!(format_uptime(59), "59s");
+        assert_eq!(format_uptime(60), "1m");
+        assert_eq!(format_uptime(3599), "59m");
+        assert_eq!(format_uptime(3600), "1h0m");
+        assert_eq!(format_uptime(3661), "1h1m");
+    }
+
+    #[test]
+    fn test_shorten_home() {
+        // Can't control $HOME in parallel tests, so test the non-matching case
+        assert_eq!(shorten_home("/other/path"), "/other/path");
+
+        // Test with a known prefix
+        if let Ok(home) = std::env::var("HOME") {
+            let input = format!("{}/projects/foo", home);
+            assert_eq!(shorten_home(&input), "~/projects/foo");
+
+            // Exact match of HOME
+            assert_eq!(shorten_home(&home), "~");
+        }
     }
 }
