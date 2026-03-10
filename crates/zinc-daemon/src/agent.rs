@@ -1,7 +1,7 @@
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -15,10 +15,11 @@ use tokio::sync::broadcast;
 use tracing::error;
 use zinc_proto::{AgentInfo, AgentState};
 
+use crate::provider::Provider;
 use crate::scrollback::ScrollbackBuffer;
 
 pub struct Agent {
-    provider: String,
+    provider: Arc<dyn Provider>,
     dir: PathBuf,
     state: AgentState,
     child: Child,
@@ -32,11 +33,11 @@ pub struct Agent {
 
 impl Agent {
     /// Spawn a new agent process attached to a PTY.
-    pub fn spawn(provider: &str, dir: &Path, args: &[String]) -> Result<Self> {
-        let command = provider_command(provider);
-
+    pub fn spawn(provider: Arc<dyn Provider>, dir: &Path, args: &[String]) -> Result<Self> {
         // Verify directory exists
         anyhow::ensure!(dir.is_dir(), "directory does not exist: {}", dir.display());
+
+        let mut cmd = provider.build_command(dir, args);
 
         // Create PTY pair
         let pty = openpty(None, None).context("failed to create PTY")?;
@@ -52,10 +53,7 @@ impl Agent {
         let stderr_fd = slave; // consumes original
 
         let child = unsafe {
-            Command::new(&command)
-                .args(args)
-                .current_dir(dir)
-                .stdin(Stdio::from(stdin_fd))
+            cmd.stdin(Stdio::from(stdin_fd))
                 .stdout(Stdio::from(stdout_fd))
                 .stderr(Stdio::from(stderr_fd))
                 .pre_exec(move || {
@@ -69,7 +67,13 @@ impl Agent {
                     Ok(())
                 })
                 .spawn()
-                .with_context(|| format!("failed to spawn '{}' in {}", command, dir.display()))?
+                .with_context(|| {
+                    format!(
+                        "failed to spawn '{}' in {}",
+                        provider.name(),
+                        dir.display()
+                    )
+                })?
         };
 
         let master = Arc::new(master);
@@ -90,7 +94,7 @@ impl Agent {
         };
 
         Ok(Self {
-            provider: provider.to_string(),
+            provider,
             dir: dir.to_path_buf(),
             state: AgentState::Working,
             child,
@@ -135,7 +139,7 @@ impl Agent {
     pub fn info(&self, id: &str) -> AgentInfo {
         AgentInfo {
             id: id.to_string(),
-            provider: self.provider.clone(),
+            provider: self.provider.name().to_string(),
             dir: self.dir.clone(),
             state: self.state,
             pid: Some(self.child.id()),
@@ -178,13 +182,6 @@ impl Agent {
         // Notify the agent process of the resize
         let _ = kill(Pid::from_raw(self.child.id() as i32), Signal::SIGWINCH);
     }
-}
-
-/// Resolve provider name to the CLI command.
-fn provider_command(provider: &str) -> String {
-    // For now, the provider name IS the command.
-    // Custom mappings can be added later via config.
-    provider.to_string()
 }
 
 /// Blocking loop that reads PTY master output, stores it in the scrollback buffer,

@@ -12,6 +12,7 @@ use tracing::{error, info};
 use zinc_proto::{Request, Response};
 
 use crate::agent::Agent;
+use crate::provider;
 
 pub struct Daemon {
     state: Arc<Mutex<DaemonState>>,
@@ -278,7 +279,8 @@ async fn handle_spawn(
         };
     }
 
-    match Agent::spawn(&provider, &dir, &args) {
+    let resolved = Arc::from(provider::resolve(&provider));
+    match Agent::spawn(resolved, &dir, &args) {
         Ok(agent) => {
             info!(id = %id, provider = %provider, dir = %dir.display(), "spawned agent");
             state.agents.insert(id.clone(), agent);
