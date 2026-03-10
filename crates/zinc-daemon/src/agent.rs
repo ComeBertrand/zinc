@@ -103,28 +103,13 @@ impl Agent {
         })
     }
 
-    /// Update state by checking if the child process is still alive.
-    pub fn refresh_state(&mut self) {
-        // Don't overwrite terminal states
-        if matches!(self.state, AgentState::Done | AgentState::Error) {
-            return;
-        }
-
+    /// Check if the child process has exited. Returns Some(exit_code) if so.
+    /// Agents that exit are cleaned up by the daemon — exit is an event, not a state.
+    pub fn check_exited(&mut self) -> Option<i32> {
         match self.child.try_wait() {
-            Ok(Some(status)) => {
-                self.state = if status.success() {
-                    AgentState::Done
-                } else {
-                    AgentState::Error
-                };
-            }
-            Ok(None) => {
-                // Still running — Phase 0 just reports "working"
-                self.state = AgentState::Working;
-            }
-            Err(_) => {
-                self.state = AgentState::Error;
-            }
+            Ok(Some(status)) => Some(status.code().unwrap_or(-1)),
+            Ok(None) => None,
+            Err(_) => Some(-1),
         }
     }
 

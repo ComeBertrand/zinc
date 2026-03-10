@@ -292,12 +292,23 @@ async fn handle_spawn(
 
 async fn handle_list(state: &Arc<Mutex<DaemonState>>) -> Response {
     let mut state = state.lock().await;
-    let mut agents = Vec::new();
 
-    for (id, agent) in state.agents.iter_mut() {
-        agent.refresh_state();
-        agents.push(agent.info(id));
+    // Remove exited agents — exit is an event, not a state
+    let exited: Vec<String> = state
+        .agents
+        .iter_mut()
+        .filter_map(|(id, agent)| agent.check_exited().map(|_| id.clone()))
+        .collect();
+    for id in &exited {
+        info!(id = %id, "agent exited, removing");
+        state.agents.remove(id);
     }
+
+    let agents = state
+        .agents
+        .iter()
+        .map(|(id, agent)| agent.info(id))
+        .collect();
 
     Response::Agents { agents }
 }

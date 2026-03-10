@@ -261,7 +261,7 @@ async fn shutdown_kills_all() {
 }
 
 #[tokio::test]
-async fn exited_process_shows_done() {
+async fn exited_process_is_cleaned_up() {
     let dir = tempfile::tempdir().unwrap();
     let sock = start_daemon(dir.path()).await;
     let mut stream = UnixStream::connect(&sock).await.unwrap();
@@ -281,18 +281,16 @@ async fn exited_process_shows_done() {
     // Give it a moment to exit
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
+    // Exited agents are removed — exit is an event, not a state
     let resp = send(&mut stream, &Request::List).await;
     match resp {
-        Response::Agents { agents } => {
-            assert_eq!(agents.len(), 1);
-            assert_eq!(agents[0].state, zinc_proto::AgentState::Done);
-        }
-        other => panic!("expected Agents, got {:?}", other),
+        Response::Agents { agents } => assert!(agents.is_empty()),
+        other => panic!("expected empty Agents, got {:?}", other),
     }
 }
 
 #[tokio::test]
-async fn failed_process_shows_error() {
+async fn failed_process_is_cleaned_up() {
     let dir = tempfile::tempdir().unwrap();
     let sock = start_daemon(dir.path()).await;
     let mut stream = UnixStream::connect(&sock).await.unwrap();
@@ -311,13 +309,11 @@ async fn failed_process_shows_error() {
 
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
+    // Exited agents are removed regardless of exit code
     let resp = send(&mut stream, &Request::List).await;
     match resp {
-        Response::Agents { agents } => {
-            assert_eq!(agents.len(), 1);
-            assert_eq!(agents[0].state, zinc_proto::AgentState::Error);
-        }
-        other => panic!("expected Agents, got {:?}", other),
+        Response::Agents { agents } => assert!(agents.is_empty()),
+        other => panic!("expected empty Agents, got {:?}", other),
     }
 }
 

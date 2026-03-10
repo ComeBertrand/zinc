@@ -2,29 +2,28 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// What an agent is doing right now.
+/// Agents that exit (successfully or with error) are cleaned up immediately —
+/// exit is an event, not a state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentState {
     /// Actively producing output
     Working,
-    /// Waiting for user input
+    /// Needs user action to continue (e.g. permission prompt)
+    Blocked,
+    /// Finished current task, waiting for new prompt
     Input,
-    /// Running but inactive
+    /// Running but inactive (heuristic fallback)
     Idle,
-    /// Exited successfully
-    Done,
-    /// Exited with error
-    Error,
 }
 
 impl std::fmt::Display for AgentState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Working => write!(f, "working"),
+            Self::Blocked => write!(f, "blocked"),
             Self::Input => write!(f, "input"),
             Self::Idle => write!(f, "idle"),
-            Self::Done => write!(f, "done"),
-            Self::Error => write!(f, "error"),
         }
     }
 }
@@ -94,20 +93,18 @@ mod tests {
     #[test]
     fn agent_state_display() {
         assert_eq!(AgentState::Working.to_string(), "working");
+        assert_eq!(AgentState::Blocked.to_string(), "blocked");
         assert_eq!(AgentState::Input.to_string(), "input");
         assert_eq!(AgentState::Idle.to_string(), "idle");
-        assert_eq!(AgentState::Done.to_string(), "done");
-        assert_eq!(AgentState::Error.to_string(), "error");
     }
 
     #[test]
     fn agent_state_serde_roundtrip() {
         for state in [
             AgentState::Working,
+            AgentState::Blocked,
             AgentState::Input,
             AgentState::Idle,
-            AgentState::Done,
-            AgentState::Error,
         ] {
             let json = serde_json::to_string(&state).unwrap();
             let back: AgentState = serde_json::from_str(&json).unwrap();
@@ -120,6 +117,10 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&AgentState::Working).unwrap(),
             "\"working\""
+        );
+        assert_eq!(
+            serde_json::to_string(&AgentState::Blocked).unwrap(),
+            "\"blocked\""
         );
         assert_eq!(
             serde_json::to_string(&AgentState::Input).unwrap(),
