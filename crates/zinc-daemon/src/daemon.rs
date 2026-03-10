@@ -24,6 +24,7 @@ struct DaemonState {
     next_id: u64,
     shutdown: bool,
     event_tx: broadcast::Sender<Event>,
+    socket_path: PathBuf,
 }
 
 impl Daemon {
@@ -35,6 +36,7 @@ impl Daemon {
                 next_id: 1,
                 shutdown: false,
                 event_tx,
+                socket_path: socket_path.clone(),
             })),
             socket_path,
         }
@@ -340,6 +342,7 @@ async fn dispatch(request: Request, state: &Arc<Mutex<DaemonState>>) -> Response
                 id
             ),
         },
+        Request::HookEvent { agent_id, event } => handle_hook_event(state, &agent_id, &event).await,
         Request::Shutdown => handle_shutdown(state).await,
     }
 }
@@ -365,8 +368,14 @@ async fn handle_spawn(
         };
     }
 
+    let socket_path = state.socket_path.to_string_lossy().to_string();
+    let env_vars = [
+        ("ZINC_AGENT_ID", id.as_str()),
+        ("ZINC_SOCKET", socket_path.as_str()),
+    ];
+
     let resolved = Arc::from(provider::resolve(&provider));
-    match Agent::spawn(resolved, &dir, &args) {
+    match Agent::spawn(resolved, &dir, &args, &env_vars) {
         Ok(agent) => {
             info!(id = %id, provider = %provider, dir = %dir.display(), "spawned agent");
             state.agents.insert(id.clone(), agent);
@@ -417,6 +426,29 @@ async fn handle_kill(state: &Arc<Mutex<DaemonState>>, id: &str) -> Response {
         }
         None => Response::Error {
             message: format!("agent '{}' not found", id),
+        },
+    }
+}
+
+async fn handle_hook_event(
+    state: &Arc<Mutex<DaemonState>>,
+    agent_id: &str,
+    event: &str,
+) -> Response {
+    let mut state = state.lock().await;
+
+    match state.agents.get_mut(agent_id) {
+        Some(agent) => match agent.handle_hook_event(event) {
+            Some(new_state) => {
+                info!(id = %agent_id, event = %event, state = %new_state, "hook event");
+                Response::Ok
+            }
+            None => Response::Error {
+                message: format!("unknown hook event '{}' for agent '{}'", event, agent_id),
+            },
+        },
+        None => Response::Error {
+            message: format!("agent '{}' not found", agent_id),
         },
     }
 }

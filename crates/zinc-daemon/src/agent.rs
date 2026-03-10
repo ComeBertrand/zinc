@@ -38,11 +38,20 @@ pub struct Agent {
 
 impl Agent {
     /// Spawn a new agent process attached to a PTY.
-    pub fn spawn(provider: Arc<dyn Provider>, dir: &Path, args: &[String]) -> Result<Self> {
+    /// `env_vars` are set on the child process (e.g. ZINC_AGENT_ID, ZINC_SOCKET).
+    pub fn spawn(
+        provider: Arc<dyn Provider>,
+        dir: &Path,
+        args: &[String],
+        env_vars: &[(&str, &str)],
+    ) -> Result<Self> {
         // Verify directory exists
         anyhow::ensure!(dir.is_dir(), "directory does not exist: {}", dir.display());
 
         let mut cmd = provider.build_command(dir, args);
+        for (key, val) in env_vars {
+            cmd.env(key, val);
+        }
 
         // Create PTY pair
         let pty = openpty(None, None).context("failed to create PTY")?;
@@ -147,6 +156,14 @@ impl Agent {
     /// Set the stored state directly (used by hook-based providers).
     pub fn set_state(&mut self, state: AgentState) {
         self.state = state;
+    }
+
+    /// Map a hook event to a state via the provider, and update stored state.
+    /// Returns the new state if the event was recognized, None otherwise.
+    pub fn handle_hook_event(&mut self, event: &str) -> Option<AgentState> {
+        let new_state = self.provider.map_hook_event(event)?;
+        self.set_state(new_state);
+        Some(new_state)
     }
 
     /// Check for a state transition. Returns Some((old, new)) if state changed.

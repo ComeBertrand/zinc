@@ -23,6 +23,10 @@ pub trait Provider: Send + Sync {
         recent_output: &[u8],
         idle_duration: Duration,
     ) -> Option<AgentState>;
+
+    /// Map a hook event name to an agent state.
+    /// Returns `None` if this provider doesn't handle hooks or doesn't recognize the event.
+    fn map_hook_event(&self, event: &str) -> Option<AgentState>;
 }
 
 /// Claude Code provider.
@@ -50,6 +54,18 @@ impl Provider for ClaudeProvider {
     ) -> Option<AgentState> {
         // Claude uses hooks for state detection, not output parsing
         None
+    }
+
+    fn map_hook_event(&self, event: &str) -> Option<AgentState> {
+        match event {
+            // Claude finished responding, waiting for new prompt
+            "stop" | "notification:idle_prompt" => Some(AgentState::Input),
+            // Claude needs user action (permission approval)
+            "notification:permission_prompt" => Some(AgentState::Blocked),
+            // Claude is actively working
+            "pre_tool_use" | "subagent_start" => Some(AgentState::Working),
+            _ => None,
+        }
     }
 }
 
@@ -92,6 +108,11 @@ impl Provider for GenericProvider {
         } else {
             Some(AgentState::Working)
         }
+    }
+
+    fn map_hook_event(&self, _event: &str) -> Option<AgentState> {
+        // Generic provider doesn't use hooks
+        None
     }
 }
 
@@ -162,5 +183,46 @@ mod tests {
     fn resolve_unknown_gives_generic() {
         let p = resolve("my-agent");
         assert_eq!(p.name(), "my-agent");
+    }
+
+    #[test]
+    fn claude_hook_stop_maps_to_input() {
+        let p = ClaudeProvider;
+        assert_eq!(p.map_hook_event("stop"), Some(AgentState::Input));
+        assert_eq!(
+            p.map_hook_event("notification:idle_prompt"),
+            Some(AgentState::Input)
+        );
+    }
+
+    #[test]
+    fn claude_hook_permission_maps_to_blocked() {
+        let p = ClaudeProvider;
+        assert_eq!(
+            p.map_hook_event("notification:permission_prompt"),
+            Some(AgentState::Blocked)
+        );
+    }
+
+    #[test]
+    fn claude_hook_tool_use_maps_to_working() {
+        let p = ClaudeProvider;
+        assert_eq!(p.map_hook_event("pre_tool_use"), Some(AgentState::Working));
+        assert_eq!(
+            p.map_hook_event("subagent_start"),
+            Some(AgentState::Working)
+        );
+    }
+
+    #[test]
+    fn claude_hook_unknown_returns_none() {
+        let p = ClaudeProvider;
+        assert_eq!(p.map_hook_event("something_else"), None);
+    }
+
+    #[test]
+    fn generic_hook_always_none() {
+        let p = GenericProvider::new("test");
+        assert_eq!(p.map_hook_event("stop"), None);
     }
 }

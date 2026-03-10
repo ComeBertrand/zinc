@@ -57,6 +57,17 @@ enum Commands {
 
     /// Check if the daemon is running
     Status,
+
+    /// Notify the daemon of a hook event (called by agent hooks)
+    HookNotify {
+        /// Agent ID (defaults to $ZINC_AGENT_ID)
+        #[arg(long, env = "ZINC_AGENT_ID")]
+        agent: String,
+
+        /// Hook event name (e.g. stop, notification:permission_prompt)
+        #[arg(long)]
+        event: String,
+    },
 }
 
 #[tokio::main]
@@ -169,6 +180,20 @@ async fn main() -> Result<()> {
                 std::process::exit(1);
             }
         },
+
+        Commands::HookNotify { agent, event } => {
+            let mut client = client::Client::connect().await?;
+            let resp = client
+                .send(zinc_proto::Request::HookEvent {
+                    agent_id: agent,
+                    event,
+                })
+                .await?;
+            if let zinc_proto::Response::Error { message } = resp {
+                eprintln!("Error: {}", message);
+                std::process::exit(1);
+            }
+        }
     }
 
     Ok(())

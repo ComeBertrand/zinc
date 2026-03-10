@@ -62,6 +62,11 @@ pub enum Request {
         cols: u16,
         rows: u16,
     },
+    /// Hook callback from an agent process (e.g. Claude Code hooks).
+    HookEvent {
+        agent_id: String,
+        event: String,
+    },
     Shutdown,
 }
 
@@ -218,6 +223,24 @@ mod tests {
     fn request_shutdown_serde() {
         let json = serde_json::to_string(&Request::Shutdown).unwrap();
         assert_eq!(json, r#"{"type":"shutdown"}"#);
+    }
+
+    #[test]
+    fn request_hook_event_serde() {
+        let req = Request::HookEvent {
+            agent_id: "fix-auth".into(),
+            event: "stop".into(),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains("\"type\":\"hook_event\""));
+        let back: Request = serde_json::from_str(&json).unwrap();
+        match back {
+            Request::HookEvent { agent_id, event } => {
+                assert_eq!(agent_id, "fix-auth");
+                assert_eq!(event, "stop");
+            }
+            _ => panic!("wrong variant"),
+        }
     }
 
     #[test]
