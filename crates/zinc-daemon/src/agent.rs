@@ -21,6 +21,7 @@ use crate::scrollback::ScrollbackBuffer;
 pub struct Agent {
     provider: Arc<dyn Provider>,
     dir: PathBuf,
+    /// Stored state — used as fallback when provider doesn't do output detection (e.g. Claude with hooks).
     state: AgentState,
     child: Child,
     pty_master: Arc<OwnedFd>,
@@ -28,6 +29,8 @@ pub struct Agent {
     output_tx: broadcast::Sender<Vec<u8>>,
     viewers: Arc<AtomicUsize>,
     started_at: Instant,
+    /// Updated by the PTY reader thread on every output chunk.
+    last_output_at: Arc<Mutex<Instant>>,
     _reader_handle: JoinHandle<()>,
 }
 
@@ -79,16 +82,18 @@ impl Agent {
         let master = Arc::new(master);
         let scrollback = Arc::new(Mutex::new(ScrollbackBuffer::default()));
         let (output_tx, _) = broadcast::channel(64);
+        let last_output_at = Arc::new(Mutex::new(Instant::now()));
 
         // Spawn a reader thread that drains PTY output into scrollback + broadcast
         let reader_handle = {
             let master = master.clone();
             let scrollback = scrollback.clone();
             let output_tx = output_tx.clone();
+            let last_output_at = last_output_at.clone();
             std::thread::Builder::new()
                 .name("pty-reader".to_string())
                 .spawn(move || {
-                    pty_reader_loop(master.as_raw_fd(), scrollback, output_tx);
+                    pty_reader_loop(master.as_raw_fd(), scrollback, output_tx, last_output_at);
                 })
                 .context("failed to spawn PTY reader thread")?
         };
@@ -103,6 +108,7 @@ impl Agent {
             output_tx,
             viewers: Arc::new(AtomicUsize::new(0)),
             started_at: Instant::now(),
+            last_output_at,
             _reader_handle: reader_handle,
         })
     }
@@ -135,13 +141,27 @@ impl Agent {
         }
     }
 
+    /// Set the stored state directly (used by hook-based providers).
+    pub fn set_state(&mut self, state: AgentState) {
+        self.state = state;
+    }
+
+    /// Compute current state: ask the provider first (output heuristic),
+    /// fall back to the stored state (set by hooks or default).
+    pub fn current_state(&self) -> AgentState {
+        let idle_duration = self.last_output_at.lock().unwrap().elapsed();
+        self.provider
+            .detect_state_from_output(&[], idle_duration)
+            .unwrap_or(self.state)
+    }
+
     /// Build an AgentInfo snapshot for reporting to clients.
     pub fn info(&self, id: &str) -> AgentInfo {
         AgentInfo {
             id: id.to_string(),
             provider: self.provider.name().to_string(),
             dir: self.dir.clone(),
-            state: self.state,
+            state: self.current_state(),
             pid: Some(self.child.id()),
             uptime_secs: self.started_at.elapsed().as_secs(),
             viewers: self.viewers.load(Ordering::Relaxed),
@@ -185,12 +205,13 @@ impl Agent {
 }
 
 /// Blocking loop that reads PTY master output, stores it in the scrollback buffer,
-/// and broadcasts it to any attached clients.
+/// broadcasts it to any attached clients, and tracks when output last arrived.
 /// Exits when the PTY slave side is closed (agent exits).
 fn pty_reader_loop(
     master_fd: i32,
     scrollback: Arc<Mutex<ScrollbackBuffer>>,
     output_tx: broadcast::Sender<Vec<u8>>,
+    last_output_at: Arc<Mutex<Instant>>,
 ) {
     let mut buf = [0u8; 4096];
     loop {
@@ -200,6 +221,9 @@ fn pty_reader_loop(
                 let data = buf[..n].to_vec();
                 if let Ok(mut sb) = scrollback.lock() {
                     sb.write(&data);
+                }
+                if let Ok(mut ts) = last_output_at.lock() {
+                    *ts = Instant::now();
                 }
                 // Ignore send errors (no receivers is fine)
                 let _ = output_tx.send(data);

@@ -459,3 +459,44 @@ async fn attach_relays_input_and_output() {
         output
     );
 }
+
+#[tokio::test]
+async fn generic_agent_transitions_to_idle() {
+    let dir = tempfile::tempdir().unwrap();
+    let sock = start_daemon(dir.path()).await;
+    let mut stream = UnixStream::connect(&sock).await.unwrap();
+
+    // Spawn a process that outputs once then sleeps (goes quiet)
+    send(
+        &mut stream,
+        &Request::Spawn {
+            provider: "bash".into(),
+            dir: PathBuf::from("/tmp"),
+            id: Some("idle-test".into()),
+            args: vec!["-c".into(), "echo hello; sleep 3600".into()],
+        },
+    )
+    .await;
+
+    // Immediately after output, should be working
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let resp = send(&mut stream, &Request::List).await;
+    match &resp {
+        Response::Agents { agents } => {
+            assert_eq!(agents.len(), 1);
+            assert_eq!(agents[0].state, zinc_proto::AgentState::Working);
+        }
+        other => panic!("expected Agents, got {:?}", other),
+    }
+
+    // After the generic provider's idle timeout (5s), should be idle
+    tokio::time::sleep(std::time::Duration::from_secs(6)).await;
+    let resp = send(&mut stream, &Request::List).await;
+    match resp {
+        Response::Agents { agents } => {
+            assert_eq!(agents.len(), 1);
+            assert_eq!(agents[0].state, zinc_proto::AgentState::Idle);
+        }
+        other => panic!("expected Agents, got {:?}", other),
+    }
+}
