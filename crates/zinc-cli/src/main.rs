@@ -40,6 +40,12 @@ enum Commands {
         json: bool,
     },
 
+    /// Attach to an agent's terminal
+    Attach {
+        /// Agent ID
+        id: String,
+    },
+
     /// Kill an agent
     Kill {
         /// Agent ID
@@ -98,18 +104,19 @@ async fn main() -> Result<()> {
                         println!("No agents running.");
                     } else {
                         println!(
-                            "{:<10} {:<10} {:<15} {:<40} {:>8}",
-                            "STATE", "AGENT", "ID", "DIRECTORY", "UPTIME"
+                            "{:<10} {:<10} {:<15} {:<40} {:>8}  {:>7}",
+                            "STATE", "AGENT", "ID", "DIRECTORY", "UPTIME", "VIEWERS"
                         );
                         for agent in agents {
                             let dir = shorten_home(&agent.dir.display().to_string());
                             println!(
-                                "{:<10} {:<10} {:<15} {:<40} {:>8}",
+                                "{:<10} {:<10} {:<15} {:<40} {:>8}  {:>7}",
                                 agent.state,
                                 agent.provider,
                                 agent.id,
                                 dir,
                                 format_uptime(agent.uptime_secs),
+                                agent.viewers,
                             );
                         }
                     }
@@ -120,6 +127,11 @@ async fn main() -> Result<()> {
                 }
                 _ => {}
             }
+        }
+
+        Commands::Attach { id } => {
+            let client = client::Client::connect().await?;
+            client.attach(&id).await?;
         }
 
         Commands::Kill { id } => {

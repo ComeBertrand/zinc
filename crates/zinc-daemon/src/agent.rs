@@ -2,6 +2,7 @@ use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Instant;
@@ -10,6 +11,7 @@ use anyhow::{Context, Result};
 use nix::pty::openpty;
 use nix::sys::signal::{kill, Signal};
 use nix::unistd::Pid;
+use tokio::sync::broadcast;
 use tracing::error;
 use zinc_proto::{AgentInfo, AgentState};
 
@@ -20,8 +22,10 @@ pub struct Agent {
     dir: PathBuf,
     state: AgentState,
     child: Child,
-    _pty_master: Arc<OwnedFd>,
-    _scrollback: Arc<Mutex<ScrollbackBuffer>>,
+    pty_master: Arc<OwnedFd>,
+    scrollback: Arc<Mutex<ScrollbackBuffer>>,
+    output_tx: broadcast::Sender<Vec<u8>>,
+    viewers: Arc<AtomicUsize>,
     started_at: Instant,
     _reader_handle: JoinHandle<()>,
 }
@@ -70,15 +74,17 @@ impl Agent {
 
         let master = Arc::new(master);
         let scrollback = Arc::new(Mutex::new(ScrollbackBuffer::default()));
+        let (output_tx, _) = broadcast::channel(64);
 
-        // Spawn a reader thread that drains PTY output into the scrollback buffer
+        // Spawn a reader thread that drains PTY output into scrollback + broadcast
         let reader_handle = {
             let master = master.clone();
             let scrollback = scrollback.clone();
+            let output_tx = output_tx.clone();
             std::thread::Builder::new()
                 .name("pty-reader".to_string())
                 .spawn(move || {
-                    pty_reader_loop(master.as_raw_fd(), scrollback);
+                    pty_reader_loop(master.as_raw_fd(), scrollback, output_tx);
                 })
                 .context("failed to spawn PTY reader thread")?
         };
@@ -88,8 +94,10 @@ impl Agent {
             dir: dir.to_path_buf(),
             state: AgentState::Working,
             child,
-            _pty_master: master,
-            _scrollback: scrollback,
+            pty_master: master,
+            scrollback,
+            output_tx,
+            viewers: Arc::new(AtomicUsize::new(0)),
             started_at: Instant::now(),
             _reader_handle: reader_handle,
         })
@@ -147,7 +155,43 @@ impl Agent {
             state: self.state,
             pid: Some(self.child.id()),
             uptime_secs: self.started_at.elapsed().as_secs(),
+            viewers: self.viewers.load(Ordering::Relaxed),
         }
+    }
+
+    /// Get the viewer count handle for increment/decrement by attach sessions.
+    pub fn viewers(&self) -> Arc<AtomicUsize> {
+        self.viewers.clone()
+    }
+
+    /// Subscribe to live PTY output. Returns a broadcast receiver.
+    pub fn subscribe(&self) -> broadcast::Receiver<Vec<u8>> {
+        self.output_tx.subscribe()
+    }
+
+    /// Get a copy of the current scrollback buffer contents.
+    pub fn scrollback_contents(&self) -> Vec<u8> {
+        self.scrollback.lock().unwrap().to_vec()
+    }
+
+    /// Get a clone of the PTY master fd (kept alive by Arc).
+    pub fn pty_master(&self) -> Arc<OwnedFd> {
+        self.pty_master.clone()
+    }
+
+    /// Resize the agent's PTY and notify the agent process.
+    pub fn resize(&self, cols: u16, rows: u16) {
+        let ws = libc::winsize {
+            ws_col: cols,
+            ws_row: rows,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        unsafe {
+            libc::ioctl(self.pty_master.as_raw_fd(), libc::TIOCSWINSZ, &ws);
+        }
+        // Notify the agent process of the resize
+        let _ = kill(Pid::from_raw(self.child.id() as i32), Signal::SIGWINCH);
     }
 }
 
@@ -158,17 +202,25 @@ fn provider_command(provider: &str) -> String {
     provider.to_string()
 }
 
-/// Blocking loop that reads PTY master output and stores it in the scrollback buffer.
+/// Blocking loop that reads PTY master output, stores it in the scrollback buffer,
+/// and broadcasts it to any attached clients.
 /// Exits when the PTY slave side is closed (agent exits).
-fn pty_reader_loop(master_fd: i32, scrollback: Arc<Mutex<ScrollbackBuffer>>) {
+fn pty_reader_loop(
+    master_fd: i32,
+    scrollback: Arc<Mutex<ScrollbackBuffer>>,
+    output_tx: broadcast::Sender<Vec<u8>>,
+) {
     let mut buf = [0u8; 4096];
     loop {
         match nix::unistd::read(master_fd, &mut buf) {
             Ok(0) => break,
             Ok(n) => {
+                let data = buf[..n].to_vec();
                 if let Ok(mut sb) = scrollback.lock() {
-                    sb.write(&buf[..n]);
+                    sb.write(&data);
                 }
+                // Ignore send errors (no receivers is fine)
+                let _ = output_tx.send(data);
             }
             Err(nix::errno::Errno::EIO) => break, // PTY closed
             Err(nix::errno::Errno::EINTR) => continue,

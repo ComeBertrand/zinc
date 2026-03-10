@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use zinc_daemon::daemon::Daemon;
 use zinc_proto::{Request, Response};
@@ -319,4 +319,147 @@ async fn failed_process_shows_error() {
         }
         other => panic!("expected Agents, got {:?}", other),
     }
+}
+
+#[tokio::test]
+async fn attach_nonexistent_agent() {
+    let dir = tempfile::tempdir().unwrap();
+    let sock = start_daemon(dir.path()).await;
+    let mut stream = UnixStream::connect(&sock).await.unwrap();
+
+    let resp = send(
+        &mut stream,
+        &Request::Attach {
+            id: "nope".into(),
+            cols: 80,
+            rows: 24,
+        },
+    )
+    .await;
+    match resp {
+        Response::Error { message } => assert!(message.contains("not found")),
+        other => panic!("expected Error, got {:?}", other),
+    }
+}
+
+#[tokio::test]
+async fn attach_receives_scrollback() {
+    let dir = tempfile::tempdir().unwrap();
+    let sock = start_daemon(dir.path()).await;
+    let mut stream = UnixStream::connect(&sock).await.unwrap();
+
+    // Spawn 'echo hello' — it will produce output then exit
+    send(
+        &mut stream,
+        &Request::Spawn {
+            provider: "bash".into(),
+            dir: PathBuf::from("/tmp"),
+            id: Some("echo-test".into()),
+            args: vec!["-c".into(), "echo hello".into()],
+        },
+    )
+    .await;
+
+    // Wait for output to be captured in scrollback
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+    // Attach on a fresh connection (the current one will switch to raw mode)
+    let mut attach_stream = UnixStream::connect(&sock).await.unwrap();
+    let mut json = serde_json::to_string(&Request::Attach {
+        id: "echo-test".into(),
+        cols: 80,
+        rows: 24,
+    })
+    .unwrap();
+    json.push('\n');
+    attach_stream.write_all(json.as_bytes()).await.unwrap();
+
+    // Read the JSON response line
+    let mut reader = BufReader::new(&mut attach_stream);
+    let mut line = String::new();
+    reader.read_line(&mut line).await.unwrap();
+    let resp: Response = serde_json::from_str(line.trim()).unwrap();
+    assert!(matches!(resp, Response::Attached));
+
+    // Read scrollback — should contain "hello"
+    let mut buf = [0u8; 4096];
+    let n = tokio::time::timeout(std::time::Duration::from_secs(2), reader.read(&mut buf))
+        .await
+        .expect("timed out reading scrollback")
+        .expect("read failed");
+
+    let output = String::from_utf8_lossy(&buf[..n]);
+    assert!(output.contains("hello"), "scrollback was: {:?}", output);
+}
+
+#[tokio::test]
+async fn attach_relays_input_and_output() {
+    let dir = tempfile::tempdir().unwrap();
+    let sock = start_daemon(dir.path()).await;
+    let mut stream = UnixStream::connect(&sock).await.unwrap();
+
+    // Spawn 'cat' — it echoes stdin to stdout
+    send(
+        &mut stream,
+        &Request::Spawn {
+            provider: "cat".into(),
+            dir: PathBuf::from("/tmp"),
+            id: Some("cat-test".into()),
+            args: vec![],
+        },
+    )
+    .await;
+
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    // Attach on a fresh connection
+    let mut attach_stream = UnixStream::connect(&sock).await.unwrap();
+    let mut json = serde_json::to_string(&Request::Attach {
+        id: "cat-test".into(),
+        cols: 80,
+        rows: 24,
+    })
+    .unwrap();
+    json.push('\n');
+    attach_stream.write_all(json.as_bytes()).await.unwrap();
+
+    // Read attached response
+    let mut reader = BufReader::new(&mut attach_stream);
+    let mut line = String::new();
+    reader.read_line(&mut line).await.unwrap();
+    let resp: Response = serde_json::from_str(line.trim()).unwrap();
+    assert!(matches!(resp, Response::Attached));
+
+    // Send some input (write directly to the underlying stream)
+    let stream_ref = reader.get_mut();
+    stream_ref.write_all(b"ping\n").await.unwrap();
+
+    // Read back the echoed output (PTY echo + cat echo)
+    let mut buf = [0u8; 4096];
+    let mut collected = Vec::new();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+
+    while tokio::time::Instant::now() < deadline {
+        match tokio::time::timeout(std::time::Duration::from_millis(500), reader.read(&mut buf))
+            .await
+        {
+            Ok(Ok(0)) => break,
+            Ok(Ok(n)) => {
+                collected.extend_from_slice(&buf[..n]);
+                let text = String::from_utf8_lossy(&collected);
+                if text.contains("ping") {
+                    break;
+                }
+            }
+            Ok(Err(_)) => break,
+            Err(_) => break, // timeout
+        }
+    }
+
+    let output = String::from_utf8_lossy(&collected);
+    assert!(
+        output.contains("ping"),
+        "expected 'ping' in output, got: {:?}",
+        output
+    );
 }

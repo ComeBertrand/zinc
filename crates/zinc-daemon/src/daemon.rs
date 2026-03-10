@@ -1,11 +1,13 @@
 use std::collections::HashMap;
+use std::os::fd::OwnedFd;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::Mutex;
+use tokio::sync::{broadcast, Mutex};
 use tracing::{error, info};
 use zinc_proto::{Request, Response};
 
@@ -91,13 +93,15 @@ async fn shutdown_signal(state: Arc<Mutex<DaemonState>>) {
     }
 }
 
-/// Handle a single client connection (newline-delimited JSON request/response).
+/// Handle a single client connection.
+/// Starts as newline-delimited JSON request/response.
+/// If the client sends an Attach request, switches to raw byte streaming.
 async fn handle_connection(stream: UnixStream, state: Arc<Mutex<DaemonState>>) -> Result<()> {
     let (reader, mut writer) = stream.into_split();
-    let mut reader = BufReader::new(reader);
+    let mut buf_reader = BufReader::new(reader);
     let mut line = String::new();
 
-    while reader.read_line(&mut line).await? > 0 {
+    while buf_reader.read_line(&mut line).await? > 0 {
         let request: Request = match serde_json::from_str(line.trim()) {
             Ok(r) => r,
             Err(e) => {
@@ -110,8 +114,44 @@ async fn handle_connection(stream: UnixStream, state: Arc<Mutex<DaemonState>>) -
             }
         };
 
-        let response = dispatch(request, &state).await;
-        write_response(&mut writer, &response).await?;
+        // Attach takes over the connection — handle it specially
+        if let Request::Attach { id, cols, rows } = request {
+            // Validate and grab agent resources under the lock
+            let attach_resources = {
+                let state_guard = state.lock().await;
+                match state_guard.agents.get(&id) {
+                    Some(agent) => {
+                        agent.resize(cols, rows);
+                        Ok((
+                            agent.subscribe(),
+                            agent.scrollback_contents(),
+                            agent.pty_master(),
+                            agent.viewers(),
+                        ))
+                    }
+                    None => Err(format!("agent '{}' not found", id)),
+                }
+            };
+
+            match attach_resources {
+                Ok((output_rx, scrollback, master, viewers)) => {
+                    write_response(&mut writer, &Response::Attached).await?;
+                    let buffered = buf_reader.buffer().to_vec();
+                    let reader = buf_reader.into_inner();
+                    return handle_attach_session(
+                        reader, writer, buffered, output_rx, scrollback, master, viewers,
+                    )
+                    .await;
+                }
+                Err(msg) => {
+                    write_response(&mut writer, &Response::Error { message: msg }).await?;
+                }
+            }
+        } else {
+            let response = dispatch(request, &state).await;
+            write_response(&mut writer, &response).await?;
+        }
+
         line.clear();
 
         // Break out after shutdown to let the daemon exit
@@ -120,6 +160,70 @@ async fn handle_connection(stream: UnixStream, state: Arc<Mutex<DaemonState>>) -
         }
     }
 
+    Ok(())
+}
+
+/// Bidirectional raw byte relay between a client and an agent's PTY.
+async fn handle_attach_session(
+    mut reader: tokio::net::unix::OwnedReadHalf,
+    mut writer: tokio::net::unix::OwnedWriteHalf,
+    buffered: Vec<u8>,
+    mut output_rx: broadcast::Receiver<Vec<u8>>,
+    scrollback: Vec<u8>,
+    master: Arc<OwnedFd>,
+    viewers: Arc<AtomicUsize>,
+) -> Result<()> {
+    viewers.fetch_add(1, Ordering::Relaxed);
+    // Send scrollback so the client sees recent context
+    if !scrollback.is_empty() {
+        writer.write_all(&scrollback).await?;
+    }
+
+    // Forward any data buffered during the JSON handshake
+    if !buffered.is_empty() {
+        nix::unistd::write(&*master, &buffered)
+            .map_err(|e| anyhow::anyhow!("PTY write error: {}", e))?;
+    }
+
+    let write_master = master.clone();
+
+    // PTY output → client
+    let output_task = async move {
+        loop {
+            match output_rx.recv().await {
+                Ok(data) => {
+                    if writer.write_all(&data).await.is_err() {
+                        break;
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    };
+
+    // Client input → PTY
+    let input_task = async move {
+        let mut buf = [0u8; 4096];
+        loop {
+            match reader.read(&mut buf).await {
+                Ok(0) => break,
+                Ok(n) => {
+                    if nix::unistd::write(&*write_master, &buf[..n]).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    };
+
+    tokio::select! {
+        _ = output_task => {}
+        _ = input_task => {}
+    }
+
+    viewers.fetch_sub(1, Ordering::Relaxed);
     Ok(())
 }
 
@@ -143,6 +247,12 @@ async fn dispatch(request: Request, state: &Arc<Mutex<DaemonState>>) -> Response
         } => handle_spawn(state, provider, dir, id, args).await,
         Request::List => handle_list(state).await,
         Request::Kill { id } => handle_kill(state, &id).await,
+        Request::Attach { id, .. } => Response::Error {
+            message: format!(
+                "attach for '{}' should be handled by connection handler",
+                id
+            ),
+        },
         Request::Shutdown => handle_shutdown(state).await,
     }
 }

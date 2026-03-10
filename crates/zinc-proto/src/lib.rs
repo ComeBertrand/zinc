@@ -38,6 +38,8 @@ pub struct AgentInfo {
     pub state: AgentState,
     pub pid: Option<u32>,
     pub uptime_secs: u64,
+    #[serde(default)]
+    pub viewers: usize,
 }
 
 /// Client -> Daemon request.
@@ -56,6 +58,11 @@ pub enum Request {
     Kill {
         id: String,
     },
+    Attach {
+        id: String,
+        cols: u16,
+        rows: u16,
+    },
     Shutdown,
 }
 
@@ -65,6 +72,7 @@ pub enum Request {
 pub enum Response {
     Spawned { id: String },
     Agents { agents: Vec<AgentInfo> },
+    Attached,
     Ok,
     Error { message: String },
 }
@@ -209,6 +217,7 @@ mod tests {
                 state: AgentState::Working,
                 pid: Some(1234),
                 uptime_secs: 60,
+                viewers: 0,
             }],
         };
         let json = serde_json::to_string(&resp).unwrap();
@@ -257,6 +266,31 @@ mod tests {
             }
             _ => panic!("wrong variant"),
         }
+    }
+
+    #[test]
+    fn request_attach_serde() {
+        let req = Request::Attach {
+            id: "test".into(),
+            cols: 120,
+            rows: 40,
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let back: Request = serde_json::from_str(&json).unwrap();
+        match back {
+            Request::Attach { id, cols, rows } => {
+                assert_eq!(id, "test");
+                assert_eq!(cols, 120);
+                assert_eq!(rows, 40);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn response_attached_serde() {
+        let json = serde_json::to_string(&Response::Attached).unwrap();
+        assert_eq!(json, r#"{"type":"attached"}"#);
     }
 
     #[test]
