@@ -9,7 +9,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{broadcast, Mutex};
 use tracing::{error, info};
-use zinc_proto::{Request, Response};
+use zinc_proto::{AgentState, Event, Request, Response};
 
 use crate::agent::Agent;
 use crate::provider;
@@ -23,15 +23,18 @@ struct DaemonState {
     agents: HashMap<String, Agent>,
     next_id: u64,
     shutdown: bool,
+    event_tx: broadcast::Sender<Event>,
 }
 
 impl Daemon {
     pub fn new(socket_path: PathBuf) -> Self {
+        let (event_tx, _) = broadcast::channel(64);
         Self {
             state: Arc::new(Mutex::new(DaemonState {
                 agents: HashMap::new(),
                 next_id: 1,
                 shutdown: false,
+                event_tx,
             })),
             socket_path,
         }
@@ -54,14 +57,21 @@ impl Daemon {
         let pid_path = self.socket_path.with_extension("pid");
         tokio::fs::write(&pid_path, std::process::id().to_string()).await?;
 
+        // Spawn background task that monitors agents for state changes and exits
+        let monitor_state = self.state.clone();
+        tokio::spawn(async move {
+            state_monitor(monitor_state).await;
+        });
+
         loop {
             tokio::select! {
                 result = listener.accept() => {
                     match result {
                         Ok((stream, _)) => {
                             let state = self.state.clone();
+                            let event_rx = state.lock().await.event_tx.subscribe();
                             tokio::spawn(async move {
-                                if let Err(e) = handle_connection(stream, state).await {
+                                if let Err(e) = handle_connection(stream, state, event_rx).await {
                                     error!("client error: {}", e);
                                 }
                             });
@@ -94,70 +104,136 @@ async fn shutdown_signal(state: Arc<Mutex<DaemonState>>) {
     }
 }
 
+/// Background task that periodically checks agents for state changes and exits.
+/// Emits events on the daemon's broadcast channel.
+async fn state_monitor(state: Arc<Mutex<DaemonState>>) {
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+    loop {
+        interval.tick().await;
+
+        let mut state = state.lock().await;
+        if state.shutdown {
+            break;
+        }
+
+        // Check for exits
+        let exited: Vec<(String, i32)> = state
+            .agents
+            .iter_mut()
+            .filter_map(|(id, agent)| agent.check_exited().map(|code| (id.clone(), code)))
+            .collect();
+        for (id, exit_code) in &exited {
+            info!(id = %id, exit_code = %exit_code, "agent exited");
+            state.agents.remove(id);
+            let _ = state
+                .event_tx
+                .send(Event::AgentExited {
+                    id: id.clone(),
+                    exit_code: *exit_code,
+                });
+        }
+
+        // Check for state changes
+        let changes: Vec<(String, AgentState, AgentState)> = state
+            .agents
+            .iter_mut()
+            .filter_map(|(id, agent)| {
+                agent
+                    .check_state_change()
+                    .map(|(old, new)| (id.clone(), old, new))
+            })
+            .collect();
+        for (id, old, new) in changes {
+            info!(id = %id, old = %old, new = %new, "state changed");
+            let _ = state.event_tx.send(Event::StateChange { id, old, new });
+        }
+    }
+}
+
 /// Handle a single client connection.
 /// Starts as newline-delimited JSON request/response.
 /// If the client sends an Attach request, switches to raw byte streaming.
-async fn handle_connection(stream: UnixStream, state: Arc<Mutex<DaemonState>>) -> Result<()> {
+/// Events from the daemon are pushed to the client as JSON lines.
+async fn handle_connection(
+    stream: UnixStream,
+    state: Arc<Mutex<DaemonState>>,
+    mut event_rx: broadcast::Receiver<Event>,
+) -> Result<()> {
     let (reader, mut writer) = stream.into_split();
     let mut buf_reader = BufReader::new(reader);
     let mut line = String::new();
 
-    while buf_reader.read_line(&mut line).await? > 0 {
-        let request: Request = match serde_json::from_str(line.trim()) {
-            Ok(r) => r,
-            Err(e) => {
-                let resp = Response::Error {
-                    message: format!("invalid request: {}", e),
-                };
-                write_response(&mut writer, &resp).await?;
-                line.clear();
-                continue;
-            }
-        };
+    loop {
+        tokio::select! {
+            result = buf_reader.read_line(&mut line) => {
+                if result? == 0 {
+                    break; // client disconnected
+                }
 
-        // Attach takes over the connection — handle it specially
-        if let Request::Attach { id, cols, rows } = request {
-            // Validate and grab agent resources under the lock
-            let attach_resources = {
-                let state_guard = state.lock().await;
-                match state_guard.agents.get(&id) {
-                    Some(agent) => {
-                        agent.resize(cols, rows);
-                        Ok((
-                            agent.subscribe(),
-                            agent.scrollback_contents(),
-                            agent.pty_master(),
-                            agent.viewers(),
-                        ))
+                let request: Request = match serde_json::from_str(line.trim()) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        let resp = Response::Error {
+                            message: format!("invalid request: {}", e),
+                        };
+                        write_response(&mut writer, &resp).await?;
+                        line.clear();
+                        continue;
                     }
-                    None => Err(format!("agent '{}' not found", id)),
-                }
-            };
+                };
 
-            match attach_resources {
-                Ok((output_rx, scrollback, master, viewers)) => {
-                    write_response(&mut writer, &Response::Attached).await?;
-                    let buffered = buf_reader.buffer().to_vec();
-                    let reader = buf_reader.into_inner();
-                    return handle_attach_session(
-                        reader, writer, buffered, output_rx, scrollback, master, viewers,
-                    )
-                    .await;
+                // Attach takes over the connection — handle it specially
+                if let Request::Attach { id, cols, rows } = request {
+                    let attach_resources = {
+                        let state_guard = state.lock().await;
+                        match state_guard.agents.get(&id) {
+                            Some(agent) => {
+                                agent.resize(cols, rows);
+                                Ok((
+                                    agent.subscribe(),
+                                    agent.scrollback_contents(),
+                                    agent.pty_master(),
+                                    agent.viewers(),
+                                ))
+                            }
+                            None => Err(format!("agent '{}' not found", id)),
+                        }
+                    };
+
+                    match attach_resources {
+                        Ok((output_rx, scrollback, master, viewers)) => {
+                            write_response(&mut writer, &Response::Attached).await?;
+                            let buffered = buf_reader.buffer().to_vec();
+                            let reader = buf_reader.into_inner();
+                            return handle_attach_session(
+                                reader, writer, buffered, output_rx, scrollback, master, viewers,
+                            )
+                            .await;
+                        }
+                        Err(msg) => {
+                            write_response(&mut writer, &Response::Error { message: msg }).await?;
+                        }
+                    }
+                } else {
+                    let response = dispatch(request, &state).await;
+                    write_response(&mut writer, &response).await?;
                 }
-                Err(msg) => {
-                    write_response(&mut writer, &Response::Error { message: msg }).await?;
+
+                line.clear();
+
+                if state.lock().await.shutdown {
+                    break;
                 }
             }
-        } else {
-            let response = dispatch(request, &state).await;
-            write_response(&mut writer, &response).await?;
-        }
-
-        line.clear();
-
-        // Break out after shutdown to let the daemon exit
-        if state.lock().await.shutdown {
-            break;
+            event = event_rx.recv() => {
+                match event {
+                    Ok(event) => {
+                        write_event(&mut writer, &event).await?;
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
         }
     }
 
@@ -233,6 +309,16 @@ async fn write_response(
     response: &Response,
 ) -> Result<()> {
     let mut json = serde_json::to_string(response)?;
+    json.push('\n');
+    writer.write_all(json.as_bytes()).await?;
+    Ok(())
+}
+
+async fn write_event(
+    writer: &mut tokio::net::unix::OwnedWriteHalf,
+    event: &Event,
+) -> Result<()> {
+    let mut json = serde_json::to_string(event)?;
     json.push('\n');
     writer.write_all(json.as_bytes()).await?;
     Ok(())

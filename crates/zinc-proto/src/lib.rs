@@ -76,6 +76,31 @@ pub enum Response {
     Error { message: String },
 }
 
+/// Daemon -> Client pushed event (unsolicited).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Event {
+    StateChange {
+        id: String,
+        old: AgentState,
+        new: AgentState,
+    },
+    AgentExited {
+        id: String,
+        exit_code: i32,
+    },
+}
+
+/// Any message sent from daemon to client (response or pushed event).
+/// Uses untagged serde — tries Response first, then Event.
+/// The type values don't overlap so deserialization is unambiguous.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ServerMessage {
+    Response(Response),
+    Event(Event),
+}
+
 /// Default socket path for daemon communication.
 pub fn default_socket_path() -> PathBuf {
     if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
@@ -292,6 +317,44 @@ mod tests {
     fn response_attached_serde() {
         let json = serde_json::to_string(&Response::Attached).unwrap();
         assert_eq!(json, r#"{"type":"attached"}"#);
+    }
+
+    #[test]
+    fn event_state_change_serde() {
+        let event = Event::StateChange {
+            id: "fix-auth".into(),
+            old: AgentState::Working,
+            new: AgentState::Input,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"type\":\"state_change\""));
+        let back: Event = serde_json::from_str(&json).unwrap();
+        match back {
+            Event::StateChange { id, old, new } => {
+                assert_eq!(id, "fix-auth");
+                assert_eq!(old, AgentState::Working);
+                assert_eq!(new, AgentState::Input);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn event_agent_exited_serde() {
+        let event = Event::AgentExited {
+            id: "test".into(),
+            exit_code: 1,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"type\":\"agent_exited\""));
+        let back: Event = serde_json::from_str(&json).unwrap();
+        match back {
+            Event::AgentExited { id, exit_code } => {
+                assert_eq!(id, "test");
+                assert_eq!(exit_code, 1);
+            }
+            _ => panic!("wrong variant"),
+        }
     }
 
     #[test]

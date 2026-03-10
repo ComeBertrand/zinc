@@ -31,6 +31,8 @@ pub struct Agent {
     started_at: Instant,
     /// Updated by the PTY reader thread on every output chunk.
     last_output_at: Arc<Mutex<Instant>>,
+    /// Last state reported via events. Used to detect transitions.
+    reported_state: AgentState,
     _reader_handle: JoinHandle<()>,
 }
 
@@ -109,6 +111,7 @@ impl Agent {
             viewers: Arc::new(AtomicUsize::new(0)),
             started_at: Instant::now(),
             last_output_at,
+            reported_state: AgentState::Working,
             _reader_handle: reader_handle,
         })
     }
@@ -144,6 +147,19 @@ impl Agent {
     /// Set the stored state directly (used by hook-based providers).
     pub fn set_state(&mut self, state: AgentState) {
         self.state = state;
+    }
+
+    /// Check for a state transition. Returns Some((old, new)) if state changed.
+    /// Updates reported_state so the same transition isn't reported twice.
+    pub fn check_state_change(&mut self) -> Option<(AgentState, AgentState)> {
+        let current = self.current_state();
+        if current != self.reported_state {
+            let old = self.reported_state;
+            self.reported_state = current;
+            Some((old, current))
+        } else {
+            None
+        }
     }
 
     /// Compute current state: ask the provider first (output heuristic),

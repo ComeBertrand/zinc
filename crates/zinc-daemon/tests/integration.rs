@@ -3,9 +3,10 @@ use std::path::PathBuf;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use zinc_daemon::daemon::Daemon;
-use zinc_proto::{Request, Response};
+use zinc_proto::{Request, Response, ServerMessage};
 
 /// Send a request and read the response over a Unix socket.
+/// Skips any pushed events and returns only the response.
 async fn send(stream: &mut UnixStream, request: &Request) -> Response {
     let mut json = serde_json::to_string(request).unwrap();
     json.push('\n');
@@ -13,8 +14,14 @@ async fn send(stream: &mut UnixStream, request: &Request) -> Response {
 
     let mut reader = BufReader::new(&mut *stream);
     let mut line = String::new();
-    reader.read_line(&mut line).await.unwrap();
-    serde_json::from_str(line.trim()).unwrap()
+    loop {
+        line.clear();
+        reader.read_line(&mut line).await.unwrap();
+        match serde_json::from_str::<ServerMessage>(line.trim()).unwrap() {
+            ServerMessage::Response(resp) => return resp,
+            ServerMessage::Event(_) => continue, // skip pushed events
+        }
+    }
 }
 
 /// Start a daemon on a temp socket and return the socket path.
@@ -499,4 +506,52 @@ async fn generic_agent_transitions_to_idle() {
         }
         other => panic!("expected Agents, got {:?}", other),
     }
+}
+
+#[tokio::test]
+async fn events_pushed_on_agent_exit() {
+    let dir = tempfile::tempdir().unwrap();
+    let sock = start_daemon(dir.path()).await;
+    let mut stream = UnixStream::connect(&sock).await.unwrap();
+
+    // Spawn a process that exits quickly
+    send(
+        &mut stream,
+        &Request::Spawn {
+            provider: "true".into(),
+            dir: PathBuf::from("/tmp"),
+            id: Some("ev-test".into()),
+            args: vec![],
+        },
+    )
+    .await;
+
+    // Read lines until we get an AgentExited event (monitor runs every 1s)
+    let mut reader = BufReader::new(&mut stream);
+    let mut line = String::new();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut got_exit = false;
+
+    while tokio::time::Instant::now() < deadline {
+        line.clear();
+        match tokio::time::timeout(std::time::Duration::from_secs(3), reader.read_line(&mut line))
+            .await
+        {
+            Ok(Ok(0)) => break,
+            Ok(Ok(_)) => {
+                if let Ok(ServerMessage::Event(zinc_proto::Event::AgentExited { id, .. })) =
+                    serde_json::from_str::<ServerMessage>(line.trim())
+                {
+                    if id == "ev-test" {
+                        got_exit = true;
+                        break;
+                    }
+                }
+            }
+            Ok(Err(_)) => break,
+            Err(_) => break,
+        }
+    }
+
+    assert!(got_exit, "expected AgentExited event for ev-test");
 }
