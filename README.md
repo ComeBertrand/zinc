@@ -1,4 +1,5 @@
-# zinc - Agent multiplexer for the terminal
+# zinc - Zinc Is Not Cowork
+Agent multiplexer for the terminal
 
 [![CI](https://github.com/ComeBertrand/zinc/actions/workflows/ci.yml/badge.svg)](https://github.com/ComeBertrand/zinc/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/zinc-cli.svg)](https://crates.io/crates/zinc-cli)
