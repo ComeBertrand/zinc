@@ -562,8 +562,11 @@ async fn events_pushed_on_agent_exit() {
 
     while tokio::time::Instant::now() < deadline {
         line.clear();
-        match tokio::time::timeout(std::time::Duration::from_secs(3), reader.read_line(&mut line))
-            .await
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            reader.read_line(&mut line),
+        )
+        .await
         {
             Ok(Ok(0)) => break,
             Ok(Ok(_)) => {
@@ -700,7 +703,11 @@ async fn spawn_emits_event() {
     let mut line = String::new();
     let mut got_spawn = false;
 
-    match tokio::time::timeout(std::time::Duration::from_secs(3), reader.read_line(&mut line)).await
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        reader.read_line(&mut line),
+    )
+    .await
     {
         Ok(Ok(_)) => {
             if let Ok(ServerMessage::Event(zinc_proto::Event::AgentSpawned { id, info })) =
@@ -744,8 +751,11 @@ async fn kill_emits_event() {
     // Drain the spawn event from the event stream
     let mut reader = BufReader::new(&mut evt_stream);
     let mut line = String::new();
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(1), reader.read_line(&mut line))
-        .await;
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        reader.read_line(&mut line),
+    )
+    .await;
 
     // Now kill
     line.clear();
@@ -761,7 +771,11 @@ async fn kill_emits_event() {
     line.clear();
     let mut got_exit = false;
 
-    match tokio::time::timeout(std::time::Duration::from_secs(3), reader.read_line(&mut line)).await
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        reader.read_line(&mut line),
+    )
+    .await
     {
         Ok(Ok(_)) => {
             if let Ok(ServerMessage::Event(zinc_proto::Event::AgentExited { id, .. })) =

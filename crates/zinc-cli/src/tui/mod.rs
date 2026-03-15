@@ -65,10 +65,7 @@ pub async fn run() -> Result<()> {
 
 /// Spawn a thread that reads crossterm events and sends them on a channel.
 /// The `active` flag pauses reading during attach (so the raw relay owns stdin).
-fn spawn_crossterm_reader() -> (
-    tokio::sync::mpsc::UnboundedReceiver<Event>,
-    Arc<AtomicBool>,
-) {
+fn spawn_crossterm_reader() -> (tokio::sync::mpsc::UnboundedReceiver<Event>, Arc<AtomicBool>) {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     let active = Arc::new(AtomicBool::new(true));
     let active_clone = active.clone();

@@ -191,10 +191,7 @@ pub fn default_id_from_dir(dir: &std::path::Path) -> String {
 
 /// Find agents running in a specific directory.
 /// Returns matching agent IDs.
-pub fn find_agents_in_dir(
-    agents: &[zinc_proto::AgentInfo],
-    dir: &std::path::Path,
-) -> Vec<String> {
+pub fn find_agents_in_dir(agents: &[zinc_proto::AgentInfo], dir: &std::path::Path) -> Vec<String> {
     agents
         .iter()
         .filter(|a| a.dir == dir)
@@ -485,10 +482,7 @@ unknown_field = "ignored"
 
     #[test]
     fn shell_quote_injection() {
-        assert_eq!(
-            shell_quote("/tmp/foo; rm -rf /"),
-            "'/tmp/foo; rm -rf /'"
-        );
+        assert_eq!(shell_quote("/tmp/foo; rm -rf /"), "'/tmp/foo; rm -rf /'");
     }
 
     #[test]
@@ -544,7 +538,12 @@ unknown_field = "ignored"
     }
 
     /// Helper to run interactive_spawn_params with simulated stdin.
-    fn interactive(input: &str, agent: Option<&str>, resume: bool, prompt: Option<&str>) -> SpawnParams {
+    fn interactive(
+        input: &str,
+        agent: Option<&str>,
+        resume: bool,
+        prompt: Option<&str>,
+    ) -> SpawnParams {
         let mut reader = std::io::Cursor::new(input.as_bytes().to_vec());
         let mut writer = Vec::new();
         interactive_spawn_params(&mut reader, &mut writer, "claude", agent, resume, prompt).unwrap()

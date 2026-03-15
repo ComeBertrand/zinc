@@ -185,6 +185,15 @@ cargo install zinc-cli zinc-daemon
 
 Download binaries from the [releases page](https://github.com/ComeBertrand/zinc/releases).
 
+### Nix flake
+
+```nix
+inputs.zinc.url = "github:ComeBertrand/zinc";
+
+# then in your packages:
+inputs.zinc.packages.${system}.default
+```
+
 ## License
 
 MIT

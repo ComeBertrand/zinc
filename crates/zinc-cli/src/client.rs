@@ -158,7 +158,6 @@ impl Client {
     /// caller is responsible for raw mode and cleanup.
     /// Returns when the user detaches (ctrl-]) or the connection closes.
     pub async fn attach_relay(mut self, id: &str, cols: u16, rows: u16) -> Result<()> {
-
         let resp = self
             .send(Request::Attach {
                 id: id.into(),
@@ -274,9 +273,9 @@ struct KbdProtoFilter {
 #[derive(Clone, Copy)]
 enum FilterState {
     Normal,
-    Esc,                      // saw ESC
-    Csi,                      // saw ESC [
-    KbdProto { marker: u8 },  // saw ESC [ [><=], accumulating params
+    Esc,                     // saw ESC
+    Csi,                     // saw ESC [
+    KbdProto { marker: u8 }, // saw ESC [ [><=], accumulating params
 }
 
 impl KbdProtoFilter {
@@ -359,7 +358,13 @@ impl KbdProtoFilter {
 /// Get the current terminal dimensions.
 pub(crate) fn terminal_size() -> (u16, u16) {
     let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
-    let ret = unsafe { libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, &mut ws) };
+    let ret = unsafe {
+        libc::ioctl(
+            libc::STDOUT_FILENO,
+            libc::TIOCGWINSZ as libc::c_ulong,
+            &mut ws,
+        )
+    };
     if ret == 0 && ws.ws_col > 0 && ws.ws_row > 0 {
         (ws.ws_col, ws.ws_row)
     } else {
@@ -391,29 +396,32 @@ fn restore_terminal(original: &Termios) {
 pub(crate) fn reset_terminal_state() {
     use std::io::Write;
     let mut out = std::io::stdout();
-    let _ = out.write_all(concat!(
-        // Keyboard protocol resets
-        "\x1b[<u",      // pop keyboard mode (Kitty keyboard protocol)
-        "\x1b[>4m",     // reset modifyOtherKeys to default (xterm)
-        // Leave alternate screen (restores main buffer if agent used it)
-        "\x1b[?1049l",
-        // Disable mouse tracking modes
-        "\x1b[?1000l",  // normal mouse tracking
-        "\x1b[?1002l",  // button-event tracking
-        "\x1b[?1003l",  // any-event tracking
-        "\x1b[?1006l",  // SGR mouse format
-        // Disable other common modes
-        "\x1b[?2004l",  // bracketed paste
-        "\x1b[?1l",     // normal cursor keys (reset DECCKM)
-        "\x1b[?7h",     // re-enable line wrapping (DECAWM)
-        // Reset visual state
-        "\x1b[r",       // reset scrolling region to full screen
-        "\x1b[m",       // reset colors/attributes
-        "\x1b[?25h",    // show cursor
-        // Clear screen so agent's TUI content doesn't linger
-        "\x1b[H",       // cursor home
-        "\x1b[2J",      // clear entire screen
-    ).as_bytes());
+    let _ = out.write_all(
+        concat!(
+            // Keyboard protocol resets
+            "\x1b[<u",  // pop keyboard mode (Kitty keyboard protocol)
+            "\x1b[>4m", // reset modifyOtherKeys to default (xterm)
+            // Leave alternate screen (restores main buffer if agent used it)
+            "\x1b[?1049l",
+            // Disable mouse tracking modes
+            "\x1b[?1000l", // normal mouse tracking
+            "\x1b[?1002l", // button-event tracking
+            "\x1b[?1003l", // any-event tracking
+            "\x1b[?1006l", // SGR mouse format
+            // Disable other common modes
+            "\x1b[?2004l", // bracketed paste
+            "\x1b[?1l",    // normal cursor keys (reset DECCKM)
+            "\x1b[?7h",    // re-enable line wrapping (DECAWM)
+            // Reset visual state
+            "\x1b[r",    // reset scrolling region to full screen
+            "\x1b[m",    // reset colors/attributes
+            "\x1b[?25h", // show cursor
+            // Clear screen so agent's TUI content doesn't linger
+            "\x1b[H",  // cursor home
+            "\x1b[2J", // clear entire screen
+        )
+        .as_bytes(),
+    );
     let _ = out.flush();
 }
 
@@ -484,18 +492,12 @@ mod tests {
 
     #[test]
     fn filter_preserves_surrounding_data() {
-        assert_eq!(
-            filtered(b"before\x1b[>1uafter"),
-            b"beforeafter"
-        );
+        assert_eq!(filtered(b"before\x1b[>1uafter"), b"beforeafter");
     }
 
     #[test]
     fn filter_strips_multiple_sequences() {
-        assert_eq!(
-            filtered(b"\x1b[>1utext\x1b[<u"),
-            b"text"
-        );
+        assert_eq!(filtered(b"\x1b[>1utext\x1b[<u"), b"text");
     }
 
     #[test]

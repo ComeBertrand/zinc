@@ -77,18 +77,14 @@ impl Agent {
                     nix::unistd::setsid()
                         .map_err(|e| std::io::Error::from_raw_os_error(e as i32))?;
                     // Set the slave PTY as the controlling terminal
-                    if libc::ioctl(slave_raw_fd, libc::TIOCSCTTY, 0) < 0 {
+                    if libc::ioctl(slave_raw_fd, libc::TIOCSCTTY as libc::c_ulong, 0) < 0 {
                         return Err(std::io::Error::last_os_error());
                     }
                     Ok(())
                 })
                 .spawn()
                 .with_context(|| {
-                    format!(
-                        "failed to spawn '{}' in {}",
-                        provider.name(),
-                        dir.display()
-                    )
+                    format!("failed to spawn '{}' in {}", provider.name(), dir.display())
                 })?
         };
 
@@ -232,7 +228,11 @@ impl Agent {
             ws_ypixel: 0,
         };
         unsafe {
-            libc::ioctl(self.pty_master.as_raw_fd(), libc::TIOCSWINSZ, &ws);
+            libc::ioctl(
+                self.pty_master.as_raw_fd(),
+                libc::TIOCSWINSZ as libc::c_ulong,
+                &ws,
+            );
         }
         // Notify the agent process of the resize
         let _ = kill(Pid::from_raw(self.child.id() as i32), Signal::SIGWINCH);

@@ -109,8 +109,7 @@ async fn main() -> Result<()> {
                 .map_err(|e| anyhow::anyhow!("invalid directory '{}': {}", dir.display(), e))?;
 
             // Resolve spawn parameters: interactive prompts or flags/defaults
-            let use_interactive =
-                !yes && config.interactive && std::io::stdin().is_terminal();
+            let use_interactive = !yes && config.interactive && std::io::stdin().is_terminal();
 
             let params = if use_interactive {
                 let mut stdin = std::io::stdin().lock();

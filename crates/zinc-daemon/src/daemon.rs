@@ -127,12 +127,10 @@ async fn state_monitor(state: Arc<Mutex<DaemonState>>) {
         for (id, exit_code) in &exited {
             info!(id = %id, exit_code = %exit_code, "agent exited");
             state.agents.remove(id);
-            let _ = state
-                .event_tx
-                .send(Event::AgentExited {
-                    id: id.clone(),
-                    exit_code: *exit_code,
-                });
+            let _ = state.event_tx.send(Event::AgentExited {
+                id: id.clone(),
+                exit_code: *exit_code,
+            });
         }
 
         // Check for state changes
@@ -316,10 +314,7 @@ async fn write_response(
     Ok(())
 }
 
-async fn write_event(
-    writer: &mut tokio::net::unix::OwnedWriteHalf,
-    event: &Event,
-) -> Result<()> {
+async fn write_event(writer: &mut tokio::net::unix::OwnedWriteHalf, event: &Event) -> Result<()> {
     let mut json = serde_json::to_string(event)?;
     json.push('\n');
     writer.write_all(json.as_bytes()).await?;
