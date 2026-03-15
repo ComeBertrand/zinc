@@ -2,6 +2,14 @@
 name = "zinc-daemon"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Daemon for zinc, the agent multiplexer"
+readme = "../../README.md"
+keywords = ["ai", "agent", "terminal", "multiplexer", "claude"]
+categories = ["command-line-utilities", "development-tools"]
 
 [[bin]]
 name = "zincd"

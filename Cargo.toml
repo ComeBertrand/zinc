@@ -5,7 +5,10 @@ resolver = "2"
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.80.0"
 license = "MIT"
+repository = "https://github.com/ComeBertrand/zinc"
+homepage = "https://github.com/ComeBertrand/zinc"
 
 [workspace.dependencies]
 zinc-proto = { path = "crates/zinc-proto" }

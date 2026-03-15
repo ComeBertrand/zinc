@@ -2,6 +2,14 @@
 name = "zinc-cli"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Terminal multiplexer for AI coding agents"
+readme = "../../README.md"
+keywords = ["ai", "agent", "terminal", "multiplexer", "claude"]
+categories = ["command-line-utilities", "development-tools"]
 
 [[bin]]
 name = "zinc"
