@@ -14,7 +14,13 @@ pub trait Provider: Send + Sync {
     fn name(&self) -> &str;
 
     /// Build the command to launch the agent in a directory.
-    fn build_command(&self, dir: &Path, args: &[String]) -> Command;
+    fn build_command(
+        &self,
+        dir: &Path,
+        args: &[String],
+        resume: bool,
+        prompt: Option<&str>,
+    ) -> Command;
 
     /// Analyze agent state from recent PTY output and time since last output.
     /// Returns `None` if this provider doesn't do output-based detection (e.g. uses hooks).
@@ -40,10 +46,22 @@ impl Provider for ClaudeProvider {
         "claude"
     }
 
-    fn build_command(&self, dir: &Path, args: &[String]) -> Command {
+    fn build_command(
+        &self,
+        dir: &Path,
+        args: &[String],
+        resume: bool,
+        prompt: Option<&str>,
+    ) -> Command {
         let mut cmd = Command::new("claude");
         cmd.current_dir(dir);
+        if resume {
+            cmd.arg("--resume");
+        }
         cmd.args(args);
+        if let Some(text) = prompt {
+            cmd.arg(text);
+        }
         cmd
     }
 
@@ -91,7 +109,13 @@ impl Provider for GenericProvider {
         &self.command
     }
 
-    fn build_command(&self, dir: &Path, args: &[String]) -> Command {
+    fn build_command(
+        &self,
+        dir: &Path,
+        args: &[String],
+        _resume: bool,
+        _prompt: Option<&str>,
+    ) -> Command {
         let mut cmd = Command::new(&self.command);
         cmd.current_dir(dir);
         cmd.args(args);
@@ -134,11 +158,35 @@ mod tests {
         let p = ClaudeProvider;
         assert_eq!(p.name(), "claude");
 
-        let cmd = p.build_command(&PathBuf::from("/tmp"), &["--verbose".into()]);
+        let cmd = p.build_command(&PathBuf::from("/tmp"), &["--verbose".into()], false, None);
         assert_eq!(cmd.get_program(), "claude");
         assert_eq!(cmd.get_current_dir(), Some(Path::new("/tmp")));
         let args: Vec<_> = cmd.get_args().collect();
         assert_eq!(args, &["--verbose"]);
+    }
+
+    #[test]
+    fn claude_resume_flag() {
+        let p = ClaudeProvider;
+        let cmd = p.build_command(&PathBuf::from("/tmp"), &[], true, None);
+        let args: Vec<_> = cmd.get_args().collect();
+        assert_eq!(args, &["--resume"]);
+    }
+
+    #[test]
+    fn claude_prompt_arg() {
+        let p = ClaudeProvider;
+        let cmd = p.build_command(&PathBuf::from("/tmp"), &[], false, Some("fix the bug"));
+        let args: Vec<_> = cmd.get_args().collect();
+        assert_eq!(args, &["fix the bug"]);
+    }
+
+    #[test]
+    fn claude_resume_and_prompt() {
+        let p = ClaudeProvider;
+        let cmd = p.build_command(&PathBuf::from("/tmp"), &[], true, Some("fix the bug"));
+        let args: Vec<_> = cmd.get_args().collect();
+        assert_eq!(args, &["--resume", "fix the bug"]);
     }
 
     #[test]
@@ -155,7 +203,7 @@ mod tests {
         let p = GenericProvider::new("codex");
         assert_eq!(p.name(), "codex");
 
-        let cmd = p.build_command(&PathBuf::from("/home"), &[]);
+        let cmd = p.build_command(&PathBuf::from("/home"), &[], false, None);
         assert_eq!(cmd.get_program(), "codex");
     }
 

@@ -18,3 +18,7 @@ clap = { version = "4", features = ["derive", "env"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1"
+ratatui = "0.29"
+crossterm = "0.28"
+toml = "0.8"
+dirs = "6"

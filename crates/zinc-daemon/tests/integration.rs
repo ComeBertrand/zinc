@@ -69,6 +69,8 @@ async fn spawn_and_list() {
             dir: PathBuf::from("/tmp"),
             id: Some("test-agent".into()),
             args: vec!["3600".into()],
+            resume: false,
+            prompt: None,
         },
     )
     .await;
@@ -100,6 +102,8 @@ async fn spawn_duplicate_id() {
         dir: PathBuf::from("/tmp"),
         id: Some("dupe".into()),
         args: vec!["3600".into()],
+        resume: false,
+        prompt: None,
     };
 
     let resp = send(&mut stream, &req).await;
@@ -125,6 +129,8 @@ async fn spawn_invalid_directory() {
             dir: PathBuf::from("/nonexistent/path/that/does/not/exist"),
             id: Some("bad-dir".into()),
             args: vec!["1".into()],
+            resume: false,
+            prompt: None,
         },
     )
     .await;
@@ -147,6 +153,8 @@ async fn kill_agent() {
             dir: PathBuf::from("/tmp"),
             id: Some("to-kill".into()),
             args: vec!["3600".into()],
+            resume: false,
+            prompt: None,
         },
     )
     .await;
@@ -193,6 +201,8 @@ async fn auto_generated_ids() {
             dir: PathBuf::from("/tmp"),
             id: None,
             args: vec!["3600".into()],
+            resume: false,
+            prompt: None,
         },
     )
     .await;
@@ -208,6 +218,8 @@ async fn auto_generated_ids() {
             dir: PathBuf::from("/tmp"),
             id: None,
             args: vec!["3600".into()],
+            resume: false,
+            prompt: None,
         },
     )
     .await;
@@ -249,6 +261,8 @@ async fn shutdown_kills_all() {
             dir: PathBuf::from("/tmp"),
             id: Some("a".into()),
             args: vec!["3600".into()],
+            resume: false,
+            prompt: None,
         },
     )
     .await;
@@ -259,6 +273,8 @@ async fn shutdown_kills_all() {
             dir: PathBuf::from("/tmp"),
             id: Some("b".into()),
             args: vec!["3600".into()],
+            resume: false,
+            prompt: None,
         },
     )
     .await;
@@ -281,6 +297,8 @@ async fn exited_process_is_cleaned_up() {
             dir: PathBuf::from("/tmp"),
             id: Some("quick".into()),
             args: vec![],
+            resume: false,
+            prompt: None,
         },
     )
     .await;
@@ -310,6 +328,8 @@ async fn failed_process_is_cleaned_up() {
             dir: PathBuf::from("/tmp"),
             id: Some("fail".into()),
             args: vec![],
+            resume: false,
+            prompt: None,
         },
     )
     .await;
@@ -359,6 +379,8 @@ async fn attach_receives_scrollback() {
             dir: PathBuf::from("/tmp"),
             id: Some("echo-test".into()),
             args: vec!["-c".into(), "echo hello".into()],
+            resume: false,
+            prompt: None,
         },
     )
     .await;
@@ -409,6 +431,8 @@ async fn attach_relays_input_and_output() {
             dir: PathBuf::from("/tmp"),
             id: Some("cat-test".into()),
             args: vec![],
+            resume: false,
+            prompt: None,
         },
     )
     .await;
@@ -481,6 +505,8 @@ async fn generic_agent_transitions_to_idle() {
             dir: PathBuf::from("/tmp"),
             id: Some("idle-test".into()),
             args: vec!["-c".into(), "echo hello; sleep 3600".into()],
+            resume: false,
+            prompt: None,
         },
     )
     .await;
@@ -522,6 +548,8 @@ async fn events_pushed_on_agent_exit() {
             dir: PathBuf::from("/tmp"),
             id: Some("ev-test".into()),
             args: vec![],
+            resume: false,
+            prompt: None,
         },
     )
     .await;
@@ -572,6 +600,8 @@ async fn hook_event_updates_claude_agent_state() {
             id: Some("hook-test".into()),
             // Use sleep as the actual binary since claude isn't installed in CI
             args: vec![],
+            resume: false,
+            prompt: None,
         },
     )
     .await;
@@ -607,6 +637,8 @@ async fn hook_event_updates_claude_agent_state() {
             dir: PathBuf::from("/tmp"),
             id: Some("hook-test2".into()),
             args: vec!["3600".into()],
+            resume: false,
+            prompt: None,
         },
     )
     .await;
@@ -638,4 +670,109 @@ async fn hook_event_updates_claude_agent_state() {
         Response::Error { message } => assert!(message.contains("not found")),
         other => panic!("expected Error for missing agent, got {:?}", other),
     }
+}
+
+#[tokio::test]
+async fn spawn_emits_event() {
+    let dir = tempfile::tempdir().unwrap();
+    let sock = start_daemon(dir.path()).await;
+
+    // Open two connections: one to spawn, one to listen for events
+    let mut cmd_stream = UnixStream::connect(&sock).await.unwrap();
+    let mut evt_stream = UnixStream::connect(&sock).await.unwrap();
+
+    // Spawn an agent via the command connection
+    send(
+        &mut cmd_stream,
+        &Request::Spawn {
+            provider: "sleep".into(),
+            dir: PathBuf::from("/tmp"),
+            id: Some("spawn-evt".into()),
+            args: vec!["3600".into()],
+            resume: false,
+            prompt: None,
+        },
+    )
+    .await;
+
+    // The event connection should receive an AgentSpawned event
+    let mut reader = BufReader::new(&mut evt_stream);
+    let mut line = String::new();
+    let mut got_spawn = false;
+
+    match tokio::time::timeout(std::time::Duration::from_secs(3), reader.read_line(&mut line)).await
+    {
+        Ok(Ok(_)) => {
+            if let Ok(ServerMessage::Event(zinc_proto::Event::AgentSpawned { id, info })) =
+                serde_json::from_str::<ServerMessage>(line.trim())
+            {
+                assert_eq!(id, "spawn-evt");
+                assert_eq!(info.id, "spawn-evt");
+                assert_eq!(info.provider, "sleep");
+                got_spawn = true;
+            }
+        }
+        _ => {}
+    }
+
+    assert!(got_spawn, "expected AgentSpawned event for spawn-evt");
+}
+
+#[tokio::test]
+async fn kill_emits_event() {
+    let dir = tempfile::tempdir().unwrap();
+    let sock = start_daemon(dir.path()).await;
+
+    // Open two connections: one to command, one to listen for events
+    let mut cmd_stream = UnixStream::connect(&sock).await.unwrap();
+    let mut evt_stream = UnixStream::connect(&sock).await.unwrap();
+
+    // Spawn then kill
+    send(
+        &mut cmd_stream,
+        &Request::Spawn {
+            provider: "sleep".into(),
+            dir: PathBuf::from("/tmp"),
+            id: Some("kill-evt".into()),
+            args: vec!["3600".into()],
+            resume: false,
+            prompt: None,
+        },
+    )
+    .await;
+
+    // Drain the spawn event from the event stream
+    let mut reader = BufReader::new(&mut evt_stream);
+    let mut line = String::new();
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(1), reader.read_line(&mut line))
+        .await;
+
+    // Now kill
+    line.clear();
+    send(
+        &mut cmd_stream,
+        &Request::Kill {
+            id: "kill-evt".into(),
+        },
+    )
+    .await;
+
+    // Should get an AgentExited event
+    line.clear();
+    let mut got_exit = false;
+
+    match tokio::time::timeout(std::time::Duration::from_secs(3), reader.read_line(&mut line)).await
+    {
+        Ok(Ok(_)) => {
+            if let Ok(ServerMessage::Event(zinc_proto::Event::AgentExited { id, .. })) =
+                serde_json::from_str::<ServerMessage>(line.trim())
+            {
+                assert_eq!(id, "kill-evt");
+                got_exit = true;
+            }
+        }
+        _ => {}
+    }
+
+    assert!(got_exit, "expected AgentExited event for kill-evt");
 }

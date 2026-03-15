@@ -52,6 +52,10 @@ pub enum Request {
         id: Option<String>,
         #[serde(default)]
         args: Vec<String>,
+        #[serde(default)]
+        resume: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        prompt: Option<String>,
     },
     List,
     Kill {
@@ -85,6 +89,10 @@ pub enum Response {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
+    AgentSpawned {
+        id: String,
+        info: AgentInfo,
+    },
     StateChange {
         id: String,
         old: AgentState,
@@ -165,6 +173,8 @@ mod tests {
             dir: PathBuf::from("/tmp"),
             id: Some("fix-auth".into()),
             args: vec!["--verbose".into()],
+            resume: false,
+            prompt: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         let back: Request = serde_json::from_str(&json).unwrap();
@@ -174,6 +184,7 @@ mod tests {
                 dir,
                 id,
                 args,
+                ..
             } => {
                 assert_eq!(provider, "claude");
                 assert_eq!(dir, PathBuf::from("/tmp"));
@@ -191,6 +202,8 @@ mod tests {
             dir: PathBuf::from("/tmp"),
             id: None,
             args: vec![],
+            resume: false,
+            prompt: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         assert!(
@@ -307,11 +320,16 @@ mod tests {
                 dir,
                 id,
                 args,
+                resume,
+                prompt,
             } => {
                 assert_eq!(provider, "claude");
                 assert_eq!(dir, PathBuf::from("/tmp"));
                 assert_eq!(id, None);
                 assert!(args.is_empty());
+                // Backward compat: missing fields default correctly
+                assert!(!resume);
+                assert!(prompt.is_none());
             }
             _ => panic!("wrong variant"),
         }

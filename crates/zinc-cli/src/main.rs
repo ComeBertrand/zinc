@@ -1,24 +1,27 @@
+use std::io::IsTerminal;
 use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 mod client;
+mod config;
+mod tui;
 
 #[derive(Parser)]
 #[command(name = "zinc", about = "Agent multiplexer for the terminal")]
 struct Cli {
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
 enum Commands {
     /// Launch a new agent
     Spawn {
-        /// Agent tool to use (e.g. claude, codex)
-        #[arg(long, default_value = "claude")]
-        agent: String,
+        /// Agent tool to use (e.g. claude)
+        #[arg(long)]
+        agent: Option<String>,
 
         /// Working directory for the agent
         #[arg(long, default_value = ".")]
@@ -27,6 +30,18 @@ enum Commands {
         /// Agent ID (auto-generated if omitted)
         #[arg(long)]
         id: Option<String>,
+
+        /// Resume previous conversation
+        #[arg(long)]
+        resume: bool,
+
+        /// Initial prompt text
+        #[arg(long)]
+        prompt: Option<String>,
+
+        /// Skip interactive prompts, use defaults
+        #[arg(long, short = 'y')]
+        yes: bool,
 
         /// Extra arguments passed to the agent command
         #[arg(last = true)]
@@ -42,8 +57,8 @@ enum Commands {
 
     /// Attach to an agent's terminal
     Attach {
-        /// Agent ID
-        id: String,
+        /// Agent ID (resolved from current directory if omitted)
+        id: Option<String>,
     },
 
     /// Kill an agent
@@ -73,23 +88,60 @@ enum Commands {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    let config = config::load_config()?;
 
-    match cli.command {
+    let command = match cli.command {
+        Some(cmd) => cmd,
+        None => return tui::run().await,
+    };
+
+    match command {
         Commands::Spawn {
             agent,
             dir,
             id,
+            resume,
+            prompt,
+            yes,
             args,
         } => {
             let dir = std::fs::canonicalize(&dir)
                 .map_err(|e| anyhow::anyhow!("invalid directory '{}': {}", dir.display(), e))?;
+
+            // Resolve spawn parameters: interactive prompts or flags/defaults
+            let use_interactive =
+                !yes && config.interactive && std::io::stdin().is_terminal();
+
+            let params = if use_interactive {
+                let mut stdin = std::io::stdin().lock();
+                let mut stderr = std::io::stderr();
+                config::interactive_spawn_params(
+                    &mut stdin,
+                    &mut stderr,
+                    &config.agent,
+                    agent.as_deref(),
+                    resume,
+                    prompt.as_deref(),
+                )?
+            } else {
+                config::SpawnParams {
+                    agent: agent.unwrap_or_else(|| config.agent.clone()),
+                    resume,
+                    prompt,
+                }
+            };
+
+            config::validate_provider(&params.agent)?;
+            let id = Some(config::resolve_id(id, config.namer.as_deref(), &dir)?);
             let mut client = client::Client::connect().await?;
             let resp = client
                 .send(zinc_proto::Request::Spawn {
-                    provider: agent,
+                    provider: params.agent,
                     dir,
                     id,
                     args,
+                    resume: params.resume,
+                    prompt: params.prompt,
                 })
                 .await?;
             match resp {
@@ -141,6 +193,30 @@ async fn main() -> Result<()> {
         }
 
         Commands::Attach { id } => {
+            let id = match id {
+                Some(id) => id,
+                None => {
+                    // Resolve from CWD: find agents running in current directory
+                    let cwd = std::fs::canonicalize(".")
+                        .map_err(|e| anyhow::anyhow!("cannot resolve current directory: {}", e))?;
+                    let mut client = client::Client::connect().await?;
+                    let resp = client.send(zinc_proto::Request::List).await?;
+                    let agents = match resp {
+                        zinc_proto::Response::Agents { agents } => agents,
+                        _ => anyhow::bail!("unexpected response from daemon"),
+                    };
+                    let matches = config::find_agents_in_dir(&agents, &cwd);
+                    match matches.len() {
+                        0 => anyhow::bail!("no agent running in {}", cwd.display()),
+                        1 => matches.into_iter().next().unwrap(),
+                        _ => anyhow::bail!(
+                            "multiple agents in {}: {}",
+                            cwd.display(),
+                            matches.join(", ")
+                        ),
+                    }
+                }
+            };
             let client = client::Client::connect().await?;
             client.attach(&id).await?;
         }

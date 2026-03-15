@@ -333,7 +333,9 @@ async fn dispatch(request: Request, state: &Arc<Mutex<DaemonState>>) -> Response
             dir,
             id,
             args,
-        } => handle_spawn(state, provider, dir, id, args).await,
+            resume,
+            prompt,
+        } => handle_spawn(state, provider, dir, id, args, resume, prompt).await,
         Request::List => handle_list(state).await,
         Request::Kill { id } => handle_kill(state, &id).await,
         Request::Attach { id, .. } => Response::Error {
@@ -353,6 +355,8 @@ async fn handle_spawn(
     dir: PathBuf,
     id: Option<String>,
     args: Vec<String>,
+    resume: bool,
+    prompt: Option<String>,
 ) -> Response {
     let mut state = state.lock().await;
 
@@ -375,10 +379,15 @@ async fn handle_spawn(
     ];
 
     let resolved = Arc::from(provider::resolve(&provider));
-    match Agent::spawn(resolved, &dir, &args, &env_vars) {
+    match Agent::spawn(resolved, &dir, &args, resume, prompt.as_deref(), &env_vars) {
         Ok(agent) => {
             info!(id = %id, provider = %provider, dir = %dir.display(), "spawned agent");
+            let info = agent.info(&id);
             state.agents.insert(id.clone(), agent);
+            let _ = state.event_tx.send(Event::AgentSpawned {
+                id: id.clone(),
+                info,
+            });
             Response::Spawned { id }
         }
         Err(e) => Response::Error {
@@ -422,6 +431,10 @@ async fn handle_kill(state: &Arc<Mutex<DaemonState>>, id: &str) -> Response {
             }
             info!(id = %id, "killed agent");
             state.agents.remove(id);
+            let _ = state.event_tx.send(Event::AgentExited {
+                id: id.into(),
+                exit_code: -1,
+            });
             Response::Ok
         }
         None => Response::Error {

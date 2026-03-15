@@ -5,13 +5,14 @@ use anyhow::{Context, Result};
 use nix::sys::termios::{cfmakeraw, tcgetattr, tcsetattr, SetArg, Termios};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
-use zinc_proto::{Request, Response};
+use zinc_proto::{Request, Response, ServerMessage};
 
 const DETACH_KEY: u8 = 0x1d; // ctrl-]
 
 pub struct Client {
     reader: BufReader<tokio::net::unix::OwnedReadHalf>,
     writer: tokio::net::unix::OwnedWriteHalf,
+    pending_events: Vec<zinc_proto::Event>,
 }
 
 impl Client {
@@ -24,6 +25,7 @@ impl Client {
                 Ok(Some(Self {
                     reader: BufReader::new(reader),
                     writer,
+                    pending_events: Vec::new(),
                 }))
             }
             Err(_) => Ok(None),
@@ -60,6 +62,7 @@ impl Client {
         Ok(Self {
             reader: BufReader::new(reader),
             writer,
+            pending_events: Vec::new(),
         })
     }
 
@@ -94,31 +97,68 @@ impl Client {
     }
 
     /// Send a request and wait for the response.
+    /// Any events that arrive before the response are buffered for later retrieval.
     pub async fn send(&mut self, request: Request) -> Result<Response> {
         let mut json = serde_json::to_string(&request)?;
         json.push('\n');
         self.writer.write_all(json.as_bytes()).await?;
 
+        loop {
+            let mut line = String::new();
+            self.reader
+                .read_line(&mut line)
+                .await
+                .context("lost connection to daemon")?;
+
+            let msg: ServerMessage =
+                serde_json::from_str(line.trim()).context("failed to parse daemon message")?;
+            match msg {
+                ServerMessage::Response(resp) => return Ok(resp),
+                ServerMessage::Event(event) => self.pending_events.push(event),
+            }
+        }
+    }
+
+    /// Read the next message from the daemon (blocking).
+    /// Returns buffered events first, then waits on the socket.
+    pub async fn read_message(&mut self) -> Result<ServerMessage> {
+        if let Some(event) = self.pending_events.pop() {
+            return Ok(ServerMessage::Event(event));
+        }
+
         let mut line = String::new();
-        self.reader
+        let n = self
+            .reader
             .read_line(&mut line)
             .await
             .context("lost connection to daemon")?;
-
-        serde_json::from_str(line.trim()).context("failed to parse daemon response")
+        if n == 0 {
+            anyhow::bail!("lost connection to daemon");
+        }
+        serde_json::from_str(line.trim()).context("failed to parse daemon message")
     }
 
-    /// Attach to an agent: send the handshake, then relay raw bytes.
-    /// Returns when the user detaches (ctrl-z) or the agent exits.
-    pub async fn attach(mut self, id: &str) -> Result<()> {
+    /// Attach to an agent from the CLI: enter raw mode, relay, restore on exit.
+    pub async fn attach(self, id: &str) -> Result<()> {
         anyhow::ensure!(
             std::io::stdin().is_terminal(),
             "cannot attach: stdin is not a terminal"
         );
 
+        let original = enter_raw_mode()?;
         let (cols, rows) = terminal_size();
+        let result = self.attach_relay(id, cols, rows).await;
+        restore_terminal(&original);
+        reset_terminal_state();
+        eprintln!("[detached from {}]", id);
+        result
+    }
 
-        // Send attach request
+    /// Attach handshake + raw byte relay. Does NOT change terminal mode —
+    /// caller is responsible for raw mode and cleanup.
+    /// Returns when the user detaches (ctrl-]) or the connection closes.
+    pub async fn attach_relay(mut self, id: &str, cols: u16, rows: u16) -> Result<()> {
+
         let resp = self
             .send(Request::Attach {
                 id: id.into(),
@@ -137,13 +177,7 @@ impl Client {
             }
         }
 
-        // Enter raw mode, relay bytes, restore on exit
-        let original = enter_raw_mode()?;
-        let result = self.raw_relay().await;
-        restore_terminal(&original);
-        reset_terminal_state();
-        eprintln!("[detached from {}]", id);
-        result
+        self.raw_relay().await
     }
 
     /// Bidirectional relay: stdin→socket, socket→stdout.
@@ -323,7 +357,7 @@ impl KbdProtoFilter {
 }
 
 /// Get the current terminal dimensions.
-fn terminal_size() -> (u16, u16) {
+pub(crate) fn terminal_size() -> (u16, u16) {
     let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
     let ret = unsafe { libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, &mut ws) };
     if ret == 0 && ws.ws_col > 0 && ws.ws_row > 0 {
@@ -354,7 +388,7 @@ fn restore_terminal(original: &Termios) {
 /// TUI agents can change many terminal modes that persist after we restore
 /// termios. We send a comprehensive set of reset sequences to ensure the
 /// user gets a clean terminal regardless of what the agent did.
-fn reset_terminal_state() {
+pub(crate) fn reset_terminal_state() {
     use std::io::Write;
     let mut out = std::io::stdout();
     let _ = out.write_all(concat!(
