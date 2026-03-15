@@ -1,5 +1,6 @@
 # zinc - Zinc Is Not Cowork
-Agent multiplexer for the terminal
+
+> Agent multiplexer for the terminal
 
 [![CI](https://github.com/ComeBertrand/zinc/actions/workflows/ci.yml/badge.svg)](https://github.com/ComeBertrand/zinc/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/zinc-cli.svg)](https://crates.io/crates/zinc-cli)
@@ -9,12 +10,12 @@ Manage AI coding agents as persistent background daemons. Attach, detach, and sw
 
 ## Features
 
-- **Never lose a session** — agents run as background daemons, survive terminal close
-- **TUI supervisor** — full-screen view of all agents, keyboard-driven
-- **Instant switching** — one keystroke to attach/detach from any agent
-- **State tracking** — see at a glance which agents are working, waiting for input, or blocked
-- **Interactive spawn** — guided agent creation with resume and prompt support
-- **Composable** — works with any worktree/project workflow (designed to pair with [yawn](https://github.com/ComeBertrand/yawn))
+- **Never lose a session** - agents run as background daemons, survive terminal close
+- **TUI supervisor** - full-screen view of all agents, keyboard-driven
+- **Instant switching** - one keystroke to attach/detach from any agent
+- **State tracking** - see at a glance which agents are working, waiting for input, or blocked
+- **Interactive spawn** - guided agent creation with resume and prompt support
+- **Composable** - works with any worktree/project workflow (designed to pair with [yawn](https://github.com/ComeBertrand/yawn))
 
 ## Quick start
 
@@ -42,7 +43,7 @@ zinc
 Running `zinc` with no arguments opens the interactive supervisor:
 
 ```
- zinc — 3 agents (1 needs input)
+ zinc -3 agents (1 needs input)
   STATE     AGENT      ID              DIRECTORY                          UPTIME
   ● work    claude     fix-auth        ~/worktrees/myapp--fix-auth          12m
 ▸ ▲ input   claude     fix-nav         ~/worktrees/myapp--fix-nav            8m
@@ -82,12 +83,12 @@ zinc spawn --agent claude --dir ~/project     # explicit agent and directory
 ```
 
 **Flags:**
-- `--agent <name>` — provider to use (default: from config, or `claude`)
-- `--dir <path>` — working directory (default: current directory)
-- `--id <name>` — agent ID (default: derived from directory name)
-- `--resume` — resume previous conversation
-- `--prompt <text>` — initial prompt
-- `--yes` / `-y` — skip interactive prompts
+- `--agent <name>` - provider to use (default: from config, or `claude`)
+- `--dir <path>` - working directory (default: current directory)
+- `--id <name>` - agent ID (default: derived from directory name)
+- `--resume` - resume previous conversation
+- `--prompt <text>` - initial prompt
+- `--yes` / `-y` - skip interactive prompts
 
 ### `zinc attach`
 
@@ -113,7 +114,7 @@ For Claude Code, state is detected via hooks (immediate, distinguishes `input` f
 
 ## Configuration
 
-`~/.config/zinc/config.toml` — all fields optional:
+`~/.config/zinc/config.toml` - all fields optional:
 
 ```toml
 [spawn]
@@ -169,8 +170,8 @@ yagent fix-auth --prompt "fix the auth bug"
 
 zinc uses a daemon-client architecture (like tmux):
 
-- **`zincd`** — long-running daemon that owns agent PTYs, tracks state, broadcasts events
-- **`zinc`** — short-lived client that connects to the daemon via Unix socket
+- **`zincd`** - long-running daemon that owns agent PTYs, tracks state, broadcasts events
+- **`zinc`** - short-lived client that connects to the daemon via Unix socket
 
 The daemon starts automatically on first `zinc` command and keeps agents alive independently of any terminal.
 
