@@ -1,4 +1,4 @@
-# zinc - Zinc Is Not Cowork
+# Zinc Is Not Cowork
 
 > Agent multiplexer for the terminal
 
