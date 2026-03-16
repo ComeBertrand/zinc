@@ -374,9 +374,6 @@ interactive = true                     # prompt for missing values on spawn (def
 
 [daemon]
 scrollback = 1048576                   # scrollback buffer size in bytes (default: 1MB)
-
-[keys]
-detach = "ctrl-]"                      # detach keybinding
 ```
 
 All fields are optional. Missing fields use defaults. Missing file uses all defaults.
@@ -530,7 +527,7 @@ The interactive supervisor interface.
 Opinionated workflow support while staying composable.
 
 **Delivered:**
-- Configuration file: `~/.config/zinc/config.toml` with `[spawn]`, `[daemon]`, `[keys]` sections
+- Configuration file: `~/.config/zinc/config.toml` with `[spawn]` and `[daemon]` sections
 - Constrained providers: only known agents accepted (`claude`), CLI validates before spawn
 - CWD-based operations: `zinc attach` resolves from CWD, `zinc spawn` defaults ID from directory
 - Namer: configurable `{dir}` template command to derive agent ID (shell-quoted, `sh -c`)

@@ -124,9 +124,6 @@ interactive = true                     # prompt for missing values on spawn
 
 [daemon]
 scrollback = 1048576                   # scrollback buffer size in bytes (1MB)
-
-[keys]
-detach = "ctrl-]"                      # detach keybinding
 ```
 
 ### Namer

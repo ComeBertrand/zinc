@@ -7,7 +7,6 @@ use std::path::PathBuf;
 pub struct ConfigFile {
     pub spawn: Option<SpawnConfig>,
     pub daemon: Option<DaemonConfig>,
-    pub keys: Option<KeysConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -22,11 +21,6 @@ pub struct DaemonConfig {
     pub scrollback: Option<usize>,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct KeysConfig {
-    pub detach: Option<String>,
-}
-
 /// Resolved config with defaults applied.
 #[derive(Debug)]
 pub struct Config {
@@ -39,8 +33,6 @@ pub struct Config {
     pub interactive: bool,
     /// Scrollback buffer size in bytes (default: 1MB).
     pub scrollback: usize,
-    /// Detach keybinding (default: "ctrl-]").
-    pub detach: String,
 }
 
 impl Default for Config {
@@ -50,7 +42,6 @@ impl Default for Config {
             namer: None,
             interactive: true,
             scrollback: 1_048_576,
-            detach: "ctrl-]".into(),
         }
     }
 }
@@ -80,18 +71,11 @@ pub fn parse_config(toml_str: &str) -> Result<Config> {
         .and_then(|d| d.scrollback)
         .unwrap_or(defaults.scrollback);
 
-    let detach = file
-        .keys
-        .as_ref()
-        .and_then(|k| k.detach.clone())
-        .unwrap_or(defaults.detach);
-
     Ok(Config {
         agent,
         namer,
         interactive,
         scrollback,
-        detach,
     })
 }
 
@@ -295,7 +279,7 @@ mod tests {
         assert!(config.namer.is_none());
         assert!(config.interactive);
         assert_eq!(config.scrollback, 1_048_576);
-        assert_eq!(config.detach, "ctrl-]");
+
     }
 
     #[test]
@@ -305,7 +289,7 @@ mod tests {
         assert!(config.namer.is_none());
         assert!(config.interactive);
         assert_eq!(config.scrollback, 1_048_576);
-        assert_eq!(config.detach, "ctrl-]");
+
     }
 
     #[test]
@@ -345,16 +329,6 @@ scrollback = 2097152
     }
 
     #[test]
-    fn parse_keys_section() {
-        let toml = r#"
-[keys]
-detach = "ctrl-z"
-"#;
-        let config = parse_config(toml).unwrap();
-        assert_eq!(config.detach, "ctrl-z");
-    }
-
-    #[test]
     fn parse_full_config() {
         let toml = r#"
 [spawn]
@@ -364,16 +338,12 @@ interactive = true
 
 [daemon]
 scrollback = 524288
-
-[keys]
-detach = "ctrl-z"
 "#;
         let config = parse_config(toml).unwrap();
         assert_eq!(config.agent, "claude");
         assert_eq!(config.namer.unwrap(), "yawn prettify {dir}");
         assert!(config.interactive);
         assert_eq!(config.scrollback, 524_288);
-        assert_eq!(config.detach, "ctrl-z");
     }
 
     #[test]
