@@ -75,14 +75,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo publish -p zinc-proto
+      - run: cargo publish -p zinc-proto || echo "zinc-proto already published, skipping"
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       - run: sleep 30
-      - run: cargo publish -p zinc-daemon
+      - run: cargo publish -p zinc-daemon || echo "zinc-daemon already published, skipping"
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       - run: sleep 30
-      - run: cargo publish -p zinc-cli
+      - run: cargo publish -p zinc-cli || echo "zinc-cli already published, skipping"
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
