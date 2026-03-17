@@ -76,12 +76,12 @@ impl Provider for ClaudeProvider {
 
     fn map_hook_event(&self, event: &str) -> Option<AgentState> {
         match event {
+            // User submitted a prompt, Claude is about to work
+            "user_prompt_submit" => Some(AgentState::Working),
             // Claude finished responding, waiting for new prompt
             "stop" | "notification:idle_prompt" => Some(AgentState::Input),
             // Claude needs user action (permission approval)
             "notification:permission_prompt" => Some(AgentState::Blocked),
-            // Claude is actively working
-            "pre_tool_use" | "subagent_start" => Some(AgentState::Working),
             _ => None,
         }
     }
@@ -253,11 +253,10 @@ mod tests {
     }
 
     #[test]
-    fn claude_hook_tool_use_maps_to_working() {
+    fn claude_hook_user_prompt_maps_to_working() {
         let p = ClaudeProvider;
-        assert_eq!(p.map_hook_event("pre_tool_use"), Some(AgentState::Working));
         assert_eq!(
-            p.map_hook_event("subagent_start"),
+            p.map_hook_event("user_prompt_submit"),
             Some(AgentState::Working)
         );
     }

@@ -67,6 +67,13 @@ enum Commands {
         id: String,
     },
 
+    /// Configure agent hooks for state detection
+    Init {
+        /// Agent to configure (e.g. claude)
+        #[arg(long)]
+        agent: String,
+    },
+
     /// Stop all agents and shut down the daemon
     Shutdown,
 
@@ -233,6 +240,11 @@ async fn main() -> Result<()> {
                 }
                 _ => {}
             }
+        }
+
+        Commands::Init { agent } => {
+            config::validate_provider(&agent)?;
+            config::init_agent_hooks(&agent)?;
         }
 
         Commands::Shutdown => {

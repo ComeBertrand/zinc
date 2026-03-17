@@ -267,6 +267,119 @@ pub fn validate_provider(name: &str) -> anyhow::Result<()> {
     }
 }
 
+/// Initialize agent hooks in the agent's settings file.
+/// Currently only supports Claude Code (~/.claude/settings.json).
+pub fn init_agent_hooks(agent: &str) -> Result<()> {
+    match agent {
+        "claude" => init_claude_hooks(),
+        _ => anyhow::bail!("init not supported for agent '{agent}'"),
+    }
+}
+
+fn init_claude_hooks() -> Result<()> {
+    let settings_path = dirs::home_dir()
+        .context("cannot determine home directory")?
+        .join(".claude")
+        .join("settings.json");
+
+    // Read existing settings or start fresh
+    let mut settings: serde_json::Value = if settings_path.exists() {
+        let content = std::fs::read_to_string(&settings_path)
+            .with_context(|| format!("failed to read {}", settings_path.display()))?;
+        serde_json::from_str(&content)
+            .with_context(|| format!("failed to parse {}", settings_path.display()))?
+    } else {
+        serde_json::json!({})
+    };
+
+    let hooks = settings
+        .as_object_mut()
+        .context("settings.json is not an object")?
+        .entry("hooks")
+        .or_insert_with(|| serde_json::json!({}));
+
+    let hooks = hooks
+        .as_object_mut()
+        .context("hooks is not an object")?;
+
+    // Define zinc hooks to add
+    let zinc_hooks: &[(&str, Option<&str>, &str)] = &[
+        ("UserPromptSubmit", None, "user_prompt_submit"),
+        ("Stop", None, "stop"),
+        ("Notification", Some("idle_prompt"), "notification:idle_prompt"),
+        ("Notification", Some("permission_prompt"), "notification:permission_prompt"),
+    ];
+
+    let mut added = Vec::new();
+    let mut skipped = Vec::new();
+
+    for &(event, matcher, zinc_event) in zinc_hooks {
+        let hook_entry = make_hook_entry(matcher, zinc_event);
+
+        let event_hooks = hooks
+            .entry(event)
+            .or_insert_with(|| serde_json::json!([]));
+
+        let arr = event_hooks
+            .as_array_mut()
+            .with_context(|| format!("hooks.{event} is not an array"))?;
+
+        // Check if zinc hook already exists for this event+matcher
+        if arr.iter().any(|entry| entry_matches_zinc(entry, zinc_event)) {
+            skipped.push(format!("{event}{}", matcher.map(|m| format!("({m})")).unwrap_or_default()));
+        } else {
+            arr.push(hook_entry);
+            added.push(format!("{event}{}", matcher.map(|m| format!("({m})")).unwrap_or_default()));
+        }
+    }
+
+    // Write back
+    if let Some(parent) = settings_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let formatted = serde_json::to_string_pretty(&settings)?;
+    std::fs::write(&settings_path, formatted.as_bytes())
+        .with_context(|| format!("failed to write {}", settings_path.display()))?;
+
+    if !added.is_empty() {
+        println!("Added hooks: {}", added.join(", "));
+    }
+    if !skipped.is_empty() {
+        println!("Already configured: {}", skipped.join(", "));
+    }
+    println!("Wrote {}", settings_path.display());
+
+    Ok(())
+}
+
+fn make_hook_entry(matcher: Option<&str>, zinc_event: &str) -> serde_json::Value {
+    let hook = serde_json::json!({
+        "type": "command",
+        "command": format!("zinc hook-notify --event {zinc_event}"),
+        "timeout": 5
+    });
+
+    let mut entry = serde_json::Map::new();
+    if let Some(m) = matcher {
+        entry.insert("matcher".into(), serde_json::Value::String(m.into()));
+    }
+    entry.insert("hooks".into(), serde_json::json!([hook]));
+    serde_json::Value::Object(entry)
+}
+
+/// Check if a hook entry already contains a zinc hook-notify command for this event.
+fn entry_matches_zinc(entry: &serde_json::Value, zinc_event: &str) -> bool {
+    let expected_cmd = format!("zinc hook-notify --event {zinc_event}");
+    entry["hooks"]
+        .as_array()
+        .map(|hooks| {
+            hooks
+                .iter()
+                .any(|h| h["command"].as_str() == Some(&expected_cmd))
+        })
+        .unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
