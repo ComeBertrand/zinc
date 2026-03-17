@@ -1,96 +1,14 @@
 use std::io::IsTerminal;
-use std::path::PathBuf;
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::Parser;
 
+mod cli;
 mod client;
 mod config;
 mod tui;
 
-#[derive(Parser)]
-#[command(name = "zinc", about = "Agent multiplexer for the terminal")]
-struct Cli {
-    #[command(subcommand)]
-    command: Option<Commands>,
-}
-
-#[derive(Subcommand)]
-enum Commands {
-    /// Launch a new agent
-    Spawn {
-        /// Agent tool to use (e.g. claude)
-        #[arg(long)]
-        agent: Option<String>,
-
-        /// Working directory for the agent
-        #[arg(long, default_value = ".")]
-        dir: PathBuf,
-
-        /// Agent ID (auto-generated if omitted)
-        #[arg(long)]
-        id: Option<String>,
-
-        /// Resume previous conversation
-        #[arg(long)]
-        resume: bool,
-
-        /// Initial prompt text
-        #[arg(long)]
-        prompt: Option<String>,
-
-        /// Skip interactive prompts, use defaults
-        #[arg(long, short = 'y')]
-        yes: bool,
-
-        /// Extra arguments passed to the agent command
-        #[arg(last = true)]
-        args: Vec<String>,
-    },
-
-    /// List all agents and their states
-    List {
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
-
-    /// Attach to an agent's terminal
-    Attach {
-        /// Agent ID (resolved from current directory if omitted)
-        id: Option<String>,
-    },
-
-    /// Kill an agent
-    Kill {
-        /// Agent ID
-        id: String,
-    },
-
-    /// Configure agent hooks for state detection
-    Init {
-        /// Agent to configure (e.g. claude)
-        #[arg(long)]
-        agent: String,
-    },
-
-    /// Stop all agents and shut down the daemon
-    Shutdown,
-
-    /// Check if the daemon is running
-    Status,
-
-    /// Notify the daemon of a hook event (called by agent hooks)
-    HookNotify {
-        /// Agent ID (defaults to $ZINC_AGENT_ID)
-        #[arg(long, env = "ZINC_AGENT_ID")]
-        agent: String,
-
-        /// Hook event name (e.g. stop, notification:permission_prompt)
-        #[arg(long)]
-        event: String,
-    },
-}
+use cli::{Cli, Commands};
 
 #[tokio::main]
 async fn main() -> Result<()> {

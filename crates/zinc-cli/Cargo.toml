@@ -28,3 +28,8 @@ ratatui = { workspace = true }
 crossterm = { workspace = true }
 toml = { workspace = true }
 dirs = { workspace = true }
+
+[build-dependencies]
+clap = { workspace = true }
+clap_complete = { workspace = true }
+clap_mangen = { workspace = true }

@@ -193,6 +193,27 @@ inputs.zinc.url = "github:ComeBertrand/zinc";
 inputs.zinc.packages.${system}.default
 ```
 
+## Shell completion & man page
+
+Shell completions are generated at build time:
+
+```bash
+# Bash
+cp completions/zinc.bash ~/.local/share/bash-completion/completions/zinc
+
+# Zsh (or place it anywhere in your $fpath)
+cp completions/_zinc ~/.local/share/zsh/site-functions/_zinc
+
+# Fish
+cp completions/zinc.fish ~/.config/fish/completions/zinc.fish
+```
+
+A man page is generated at build time:
+
+```bash
+man target/*/build/zinc-cli-*/out/man/zinc.1
+```
+
 ## License
 
 MIT

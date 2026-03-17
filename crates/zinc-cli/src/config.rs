@@ -298,16 +298,22 @@ fn init_claude_hooks() -> Result<()> {
         .entry("hooks")
         .or_insert_with(|| serde_json::json!({}));
 
-    let hooks = hooks
-        .as_object_mut()
-        .context("hooks is not an object")?;
+    let hooks = hooks.as_object_mut().context("hooks is not an object")?;
 
     // Define zinc hooks to add
     let zinc_hooks: &[(&str, Option<&str>, &str)] = &[
         ("UserPromptSubmit", None, "user_prompt_submit"),
         ("Stop", None, "stop"),
-        ("Notification", Some("idle_prompt"), "notification:idle_prompt"),
-        ("Notification", Some("permission_prompt"), "notification:permission_prompt"),
+        (
+            "Notification",
+            Some("idle_prompt"),
+            "notification:idle_prompt",
+        ),
+        (
+            "Notification",
+            Some("permission_prompt"),
+            "notification:permission_prompt",
+        ),
     ];
 
     let mut added = Vec::new();
@@ -316,20 +322,27 @@ fn init_claude_hooks() -> Result<()> {
     for &(event, matcher, zinc_event) in zinc_hooks {
         let hook_entry = make_hook_entry(matcher, zinc_event);
 
-        let event_hooks = hooks
-            .entry(event)
-            .or_insert_with(|| serde_json::json!([]));
+        let event_hooks = hooks.entry(event).or_insert_with(|| serde_json::json!([]));
 
         let arr = event_hooks
             .as_array_mut()
             .with_context(|| format!("hooks.{event} is not an array"))?;
 
         // Check if zinc hook already exists for this event+matcher
-        if arr.iter().any(|entry| entry_matches_zinc(entry, zinc_event)) {
-            skipped.push(format!("{event}{}", matcher.map(|m| format!("({m})")).unwrap_or_default()));
+        if arr
+            .iter()
+            .any(|entry| entry_matches_zinc(entry, zinc_event))
+        {
+            skipped.push(format!(
+                "{event}{}",
+                matcher.map(|m| format!("({m})")).unwrap_or_default()
+            ));
         } else {
             arr.push(hook_entry);
-            added.push(format!("{event}{}", matcher.map(|m| format!("({m})")).unwrap_or_default()));
+            added.push(format!(
+                "{event}{}",
+                matcher.map(|m| format!("({m})")).unwrap_or_default()
+            ));
         }
     }
 
@@ -392,7 +405,6 @@ mod tests {
         assert!(config.namer.is_none());
         assert!(config.interactive);
         assert_eq!(config.scrollback, 1_048_576);
-
     }
 
     #[test]
@@ -402,7 +414,6 @@ mod tests {
         assert!(config.namer.is_none());
         assert!(config.interactive);
         assert_eq!(config.scrollback, 1_048_576);
-
     }
 
     #[test]
