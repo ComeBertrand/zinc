@@ -7,6 +7,13 @@ use std::path::PathBuf;
 pub struct ConfigFile {
     pub spawn: Option<SpawnConfig>,
     pub daemon: Option<DaemonConfig>,
+    pub notify: Option<NotifyConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct NotifyConfig {
+    pub command: Option<String>,
+    pub on_states: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]

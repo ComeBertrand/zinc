@@ -12,6 +12,7 @@ use tracing::{error, info};
 use zinc_proto::{AgentState, Event, Request, Response};
 
 use crate::agent::Agent;
+use crate::notify::{self, NotifyConfig};
 use crate::provider;
 
 pub struct Daemon {
@@ -59,10 +60,16 @@ impl Daemon {
         let pid_path = self.socket_path.with_extension("pid");
         tokio::fs::write(&pid_path, std::process::id().to_string()).await?;
 
+        // Load notification config
+        let notify_config = notify::load_notify_config();
+        if let Some(ref cfg) = notify_config {
+            info!(command = %cfg.command, "notifications enabled");
+        }
+
         // Spawn background task that monitors agents for state changes and exits
         let monitor_state = self.state.clone();
         tokio::spawn(async move {
-            state_monitor(monitor_state).await;
+            state_monitor(monitor_state, notify_config).await;
         });
 
         loop {
@@ -108,7 +115,7 @@ async fn shutdown_signal(state: Arc<Mutex<DaemonState>>) {
 
 /// Background task that periodically checks agents for state changes and exits.
 /// Emits events on the daemon's broadcast channel.
-async fn state_monitor(state: Arc<Mutex<DaemonState>>) {
+async fn state_monitor(state: Arc<Mutex<DaemonState>>, notify_config: Option<NotifyConfig>) {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
     loop {
         interval.tick().await;
@@ -145,6 +152,9 @@ async fn state_monitor(state: Arc<Mutex<DaemonState>>) {
             .collect();
         for (id, old, new) in changes {
             info!(id = %id, old = %old, new = %new, "state changed");
+            if let Some(ref cfg) = notify_config {
+                notify::fire_if_matching(cfg, &id, old, new);
+            }
             let _ = state.event_tx.send(Event::StateChange { id, old, new });
         }
     }

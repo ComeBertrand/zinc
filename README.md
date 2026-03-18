@@ -124,6 +124,22 @@ interactive = true                     # prompt for missing values on spawn
 
 [daemon]
 scrollback = 1048576                   # scrollback buffer size in bytes (1MB)
+
+[notify]
+command = "notify-send 'zinc: {id}' '{state}'"   # command to run on state change
+on_states = ["input", "blocked"]                  # which states trigger (default)
+```
+
+### Notifications
+
+The `notify.command` field runs a command when an agent transitions to a matching state. Placeholders `{id}`, `{state}`, `{old_state}` are shell-quoted and substituted.
+
+```toml
+# Linux (libnotify)
+command = "notify-send 'zinc: {id}' '{state}'"
+
+# macOS
+command = "osascript -e 'display notification \"{state}\" with title \"zinc: {id}\"'"
 ```
 
 ### Namer

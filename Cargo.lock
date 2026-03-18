@@ -1399,12 +1399,14 @@ name = "zinc-daemon"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "dirs",
  "libc",
  "nix",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
+ "toml",
  "tracing",
  "tracing-subscriber",
  "zinc-proto",
