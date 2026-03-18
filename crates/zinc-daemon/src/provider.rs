@@ -1,8 +1,24 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
 use zinc_proto::AgentState;
+
+/// Context window usage for an agent.
+pub struct ContextUsage {
+    pub used_tokens: u64,
+    pub limit_tokens: u64,
+}
+
+impl ContextUsage {
+    pub fn percent(&self) -> u8 {
+        if self.limit_tokens == 0 {
+            return 0;
+        }
+        let pct = (self.used_tokens as f64 / self.limit_tokens as f64 * 100.0).round() as u64;
+        pct.min(100) as u8
+    }
+}
 
 /// Adapter for a specific agent tool (claude, codex, etc.).
 ///
@@ -33,6 +49,12 @@ pub trait Provider: Send + Sync {
     /// Map a hook event name to an agent state.
     /// Returns `None` if this provider doesn't handle hooks or doesn't recognize the event.
     fn map_hook_event(&self, event: &str) -> Option<AgentState>;
+
+    /// Read context window usage for an agent. Returns `None` if not supported
+    /// or if the data isn't available.
+    fn context_usage(&self, _pid: u32, _dir: &Path) -> Option<ContextUsage> {
+        None
+    }
 }
 
 /// Claude Code provider.
@@ -85,6 +107,103 @@ impl Provider for ClaudeProvider {
             _ => None,
         }
     }
+
+    fn context_usage(&self, pid: u32, dir: &Path) -> Option<ContextUsage> {
+        claude_context_usage(pid, dir)
+    }
+}
+
+// --- Claude context usage parsing ---
+
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+struct ClaudeSessionFile {
+    #[serde(rename = "sessionId")]
+    session_id: String,
+}
+
+#[derive(Deserialize)]
+struct ClaudeJournalLine {
+    #[serde(rename = "type")]
+    line_type: Option<String>,
+    message: Option<ClaudeJournalMessage>,
+}
+
+#[derive(Deserialize)]
+struct ClaudeJournalMessage {
+    model: Option<String>,
+    usage: Option<ClaudeUsage>,
+}
+
+#[derive(Deserialize)]
+struct ClaudeUsage {
+    #[serde(default)]
+    input_tokens: u64,
+    #[serde(default)]
+    cache_creation_input_tokens: u64,
+    #[serde(default)]
+    cache_read_input_tokens: u64,
+}
+
+fn claude_context_usage(pid: u32, dir: &Path) -> Option<ContextUsage> {
+    let home = std::env::var("HOME").ok()?;
+    let claude_dir = PathBuf::from(&home).join(".claude");
+
+    // Read session file: ~/.claude/sessions/<pid>.json → sessionId
+    let session_path = claude_dir.join("sessions").join(format!("{pid}.json"));
+    let session_content = std::fs::read_to_string(&session_path).ok()?;
+    let session: ClaudeSessionFile = serde_json::from_str(&session_content).ok()?;
+
+    // Encode directory path the way Claude does: /home/user/foo → -home-user-foo
+    let encoded_dir = encode_claude_path(dir);
+    let jsonl_path = claude_dir
+        .join("projects")
+        .join(&encoded_dir)
+        .join(format!("{}.jsonl", session.session_id));
+
+    // Read JSONL, find last assistant message with usage
+    let content = std::fs::read_to_string(&jsonl_path).ok()?;
+    let (usage, model) = find_last_usage(&content)?;
+
+    let used = usage.input_tokens
+        + usage.cache_creation_input_tokens
+        + usage.cache_read_input_tokens;
+
+    // Context limit: 1M if model has [1m] suffix or tokens already exceed 200k
+    let limit = if model.as_deref().is_some_and(|m| m.contains("[1m]")) || used > 180_000 {
+        1_000_000
+    } else {
+        200_000
+    };
+
+    Some(ContextUsage {
+        used_tokens: used,
+        limit_tokens: limit,
+    })
+}
+
+fn encode_claude_path(dir: &Path) -> String {
+    let s = dir.to_string_lossy();
+    s.replace('/', "-").trim_start_matches('-').to_string()
+}
+
+fn find_last_usage(content: &str) -> Option<(ClaudeUsage, Option<String>)> {
+    for line in content.lines().rev() {
+        let entry: ClaudeJournalLine = match serde_json::from_str(line) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        if entry.line_type.as_deref() != Some("assistant") {
+            continue;
+        }
+        if let Some(msg) = entry.message {
+            if let Some(usage) = msg.usage {
+                return Some((usage, msg.model));
+            }
+        }
+    }
+    None
 }
 
 /// Generic provider for any CLI agent.
@@ -271,5 +390,84 @@ mod tests {
     fn generic_hook_always_none() {
         let p = GenericProvider::new("test");
         assert_eq!(p.map_hook_event("stop"), None);
+    }
+
+    #[test]
+    fn generic_context_usage_returns_none() {
+        let p = GenericProvider::new("test");
+        assert!(p.context_usage(1234, Path::new("/tmp")).is_none());
+    }
+
+    #[test]
+    fn context_usage_percent() {
+        let cu = ContextUsage {
+            used_tokens: 150_000,
+            limit_tokens: 200_000,
+        };
+        assert_eq!(cu.percent(), 75);
+    }
+
+    #[test]
+    fn context_usage_percent_zero_limit() {
+        let cu = ContextUsage {
+            used_tokens: 100,
+            limit_tokens: 0,
+        };
+        assert_eq!(cu.percent(), 0);
+    }
+
+    #[test]
+    fn context_usage_percent_clamped() {
+        let cu = ContextUsage {
+            used_tokens: 250_000,
+            limit_tokens: 200_000,
+        };
+        assert_eq!(cu.percent(), 100);
+    }
+
+    #[test]
+    fn encode_claude_path_basic() {
+        assert_eq!(
+            encode_claude_path(Path::new("/home/user/Workspace/zinc")),
+            "home-user-Workspace-zinc"
+        );
+    }
+
+    #[test]
+    fn encode_claude_path_root() {
+        assert_eq!(encode_claude_path(Path::new("/")), "");
+    }
+
+    #[test]
+    fn find_last_usage_basic() {
+        let jsonl = r#"{"type":"user","message":{"content":"hello"}}
+{"type":"assistant","message":{"model":"claude-opus-4-6[1m]","usage":{"input_tokens":100,"cache_creation_input_tokens":200,"cache_read_input_tokens":300}}}
+{"type":"user","message":{"content":"bye"}}"#;
+        let (usage, model) = find_last_usage(jsonl).unwrap();
+        assert_eq!(usage.input_tokens, 100);
+        assert_eq!(usage.cache_creation_input_tokens, 200);
+        assert_eq!(usage.cache_read_input_tokens, 300);
+        assert_eq!(model.as_deref(), Some("claude-opus-4-6[1m]"));
+    }
+
+    #[test]
+    fn find_last_usage_returns_last() {
+        let jsonl = r#"{"type":"assistant","message":{"model":"m1","usage":{"input_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}
+{"type":"assistant","message":{"model":"m2","usage":{"input_tokens":50,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}"#;
+        let (usage, model) = find_last_usage(jsonl).unwrap();
+        assert_eq!(usage.input_tokens, 50);
+        assert_eq!(model.as_deref(), Some("m2"));
+    }
+
+    #[test]
+    fn find_last_usage_none_when_empty() {
+        assert!(find_last_usage("").is_none());
+    }
+
+    #[test]
+    fn find_last_usage_skips_malformed() {
+        let jsonl = "not json\n{\"type\":\"assistant\",\"message\":{\"usage\":{\"input_tokens\":42,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0}}}";
+        let (usage, _) = find_last_usage(jsonl).unwrap();
+        assert_eq!(usage.input_tokens, 42);
     }
 }

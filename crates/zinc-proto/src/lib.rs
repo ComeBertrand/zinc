@@ -39,6 +39,8 @@ pub struct AgentInfo {
     pub uptime_secs: u64,
     #[serde(default)]
     pub viewers: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_percent: Option<u8>,
 }
 
 /// Client -> Daemon request.
@@ -101,6 +103,10 @@ pub enum Event {
     AgentExited {
         id: String,
         exit_code: i32,
+    },
+    ContextUpdate {
+        id: String,
+        context_percent: u8,
     },
 }
 
@@ -280,6 +286,7 @@ mod tests {
                 pid: Some(1234),
                 uptime_secs: 60,
                 viewers: 0,
+                context_percent: None,
             }],
         };
         let json = serde_json::to_string(&resp).unwrap();

@@ -271,6 +271,12 @@ fn apply_event(app: &mut App, event: zinc_proto::Event) {
         zinc_proto::Event::AgentExited { id, .. } => {
             app.remove_agent(&id);
         }
+        zinc_proto::Event::ContextUpdate {
+            id,
+            context_percent,
+        } => {
+            app.update_context(&id, context_percent);
+        }
     }
 }
 

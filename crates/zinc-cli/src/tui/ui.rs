@@ -74,6 +74,7 @@ fn render_table(frame: &mut Frame, area: Rect, app: &App) {
         Cell::from("ID"),
         Cell::from("DIRECTORY"),
         Cell::from("UPTIME"),
+        Cell::from("CTX"),
         Cell::from("VIEWERS"),
     ])
     .style(Style::new().fg(Color::DarkGray))
@@ -91,6 +92,7 @@ fn render_table(frame: &mut Frame, area: Rect, app: &App) {
                 Cell::from(agent.id.as_str()),
                 Cell::from(dir),
                 Cell::from(format_uptime(agent.uptime_secs)),
+                Cell::from(context_display(agent.context_percent)),
                 Cell::from(format!("{}", agent.viewers)),
             ])
         })
@@ -102,6 +104,7 @@ fn render_table(frame: &mut Frame, area: Rect, app: &App) {
         Constraint::Length(15),
         Constraint::Fill(1),
         Constraint::Length(8),
+        Constraint::Length(6),
         Constraint::Length(7),
     ];
 
@@ -145,6 +148,22 @@ fn state_display(state: &AgentState) -> (&'static str, Color) {
         AgentState::Blocked => ("▲ block", Color::Red),
         AgentState::Input => ("▲ input", Color::Yellow),
         AgentState::Idle => ("○ idle", Color::DarkGray),
+    }
+}
+
+fn context_display(pct: Option<u8>) -> Span<'static> {
+    match pct {
+        Some(p) => {
+            let color = if p >= 90 {
+                Color::Red
+            } else if p >= 70 {
+                Color::Yellow
+            } else {
+                Color::Green
+            };
+            Span::styled(format!("{p}%"), Style::new().fg(color))
+        }
+        None => Span::raw(""),
     }
 }
 

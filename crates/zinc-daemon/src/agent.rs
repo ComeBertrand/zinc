@@ -33,6 +33,8 @@ pub struct Agent {
     last_output_at: Arc<Mutex<Instant>>,
     /// Last state reported via events. Used to detect transitions.
     reported_state: AgentState,
+    /// Cached context usage percentage, updated periodically.
+    context_percent: Option<u8>,
     _reader_handle: JoinHandle<()>,
 }
 
@@ -119,6 +121,7 @@ impl Agent {
             started_at: Instant::now(),
             last_output_at,
             reported_state: AgentState::Working,
+            context_percent: None,
             _reader_handle: reader_handle,
         })
     }
@@ -196,7 +199,21 @@ impl Agent {
             pid: Some(self.child.id()),
             uptime_secs: self.started_at.elapsed().as_secs(),
             viewers: self.viewers.load(Ordering::Relaxed),
+            context_percent: self.context_percent,
         }
+    }
+
+    /// Recompute context usage from the provider. Returns whether the value changed.
+    pub fn refresh_context_usage(&mut self) -> bool {
+        let old = self.context_percent;
+        if let Some(usage) = self.provider.context_usage(self.child.id(), &self.dir) {
+            self.context_percent = Some(usage.percent());
+        }
+        self.context_percent != old
+    }
+
+    pub fn context_percent(&self) -> Option<u8> {
+        self.context_percent
     }
 
     /// Get the viewer count handle for increment/decrement by attach sessions.

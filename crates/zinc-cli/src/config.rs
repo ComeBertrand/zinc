@@ -534,6 +534,7 @@ unknown_field = "ignored"
                 pid: Some(1),
                 uptime_secs: 0,
                 viewers: 0,
+                context_percent: None,
             },
             AgentInfo {
                 id: "b".into(),
@@ -543,6 +544,7 @@ unknown_field = "ignored"
                 pid: Some(2),
                 uptime_secs: 0,
                 viewers: 0,
+                context_percent: None,
             },
             AgentInfo {
                 id: "c".into(),
@@ -552,6 +554,7 @@ unknown_field = "ignored"
                 pid: Some(3),
                 uptime_secs: 0,
                 viewers: 0,
+                context_percent: None,
             },
         ];
 

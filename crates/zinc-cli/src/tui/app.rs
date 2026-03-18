@@ -91,6 +91,13 @@ impl App {
         }
     }
 
+    /// Update a single agent's context usage percentage.
+    pub fn update_context(&mut self, id: &str, context_percent: u8) {
+        if let Some(agent) = self.agents.iter_mut().find(|a| a.id == id) {
+            agent.context_percent = Some(context_percent);
+        }
+    }
+
     /// Remove an agent by ID. Returns true if it was found.
     pub fn remove_agent(&mut self, id: &str) -> bool {
         let before = self.agents.len();

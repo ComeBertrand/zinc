@@ -117,8 +117,11 @@ async fn shutdown_signal(state: Arc<Mutex<DaemonState>>) {
 /// Emits events on the daemon's broadcast channel.
 async fn state_monitor(state: Arc<Mutex<DaemonState>>, notify_config: Option<NotifyConfig>) {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+    let mut context_counter: u32 = 0;
+
     loop {
         interval.tick().await;
+        context_counter += 1;
 
         let mut state = state.lock().await;
         if state.shutdown {
@@ -156,6 +159,30 @@ async fn state_monitor(state: Arc<Mutex<DaemonState>>, notify_config: Option<Not
                 notify::fire_if_matching(cfg, &id, old, new);
             }
             let _ = state.event_tx.send(Event::StateChange { id, old, new });
+        }
+
+        // Check context usage every 10 seconds
+        if context_counter >= 10 {
+            context_counter = 0;
+
+            let updates: Vec<(String, u8)> = state
+                .agents
+                .iter_mut()
+                .filter_map(|(id, agent)| {
+                    if agent.refresh_context_usage() {
+                        agent.context_percent().map(|pct| (id.clone(), pct))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            for (id, pct) in updates {
+                let _ = state.event_tx.send(Event::ContextUpdate {
+                    id,
+                    context_percent: pct,
+                });
+            }
         }
     }
 }
@@ -413,6 +440,11 @@ async fn handle_list(state: &Arc<Mutex<DaemonState>>) -> Response {
     for id in &exited {
         info!(id = %id, "agent exited, removing");
         state.agents.remove(id);
+    }
+
+    // Refresh context usage so clients get fresh data
+    for agent in state.agents.values_mut() {
+        agent.refresh_context_usage();
     }
 
     let agents = state
