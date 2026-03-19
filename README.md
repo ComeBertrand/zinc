@@ -14,7 +14,7 @@ Manage AI coding agents as persistent background daemons. Attach, detach, and sw
 - **TUI supervisor** - full-screen view of all agents, keyboard-driven
 - **Instant switching** - one keystroke to attach/detach from any agent
 - **State tracking** - see at a glance which agents are working, waiting for input, or blocked
-- **Interactive spawn** - guided agent creation with resume and prompt support
+- **Session picker** - resume previous sessions or start fresh, with automatic session discovery
 - **Composable** - works with any worktree/project workflow (designed to pair with [yawn](https://github.com/ComeBertrand/yawn))
 
 ## Quick start
@@ -29,7 +29,7 @@ cd ~/projects/myapp
 zinc spawn
 
 # Or with a prompt
-zinc spawn --prompt "fix the failing auth tests"
+zinc spawn "fix the failing auth tests"
 
 # Attach (resolves from current directory)
 zinc attach
@@ -63,7 +63,7 @@ When attached, a status bar shows the agent info. `ctrl-]` detaches back to the 
 
 ```bash
 zinc                              # open TUI
-zinc spawn [options]              # launch a new agent
+zinc spawn [prompt] [options]     # launch a new agent
 zinc attach [id]                  # attach to an agent (resolves from CWD if omitted)
 zinc list [--json]                # list all agents and their states
 zinc kill <id>                    # stop an agent
@@ -74,21 +74,21 @@ zinc status                       # check if the daemon is running
 ### `zinc spawn`
 
 ```bash
-zinc spawn                                    # interactive: prompts for options
-zinc spawn --prompt "fix the bug"             # start with a prompt
-zinc spawn --resume                           # resume previous conversation
-zinc spawn --resume --prompt "now the tests"  # resume + new prompt
-zinc spawn -y                                 # skip prompts, use defaults
-zinc spawn --agent claude --dir ~/project     # explicit agent and directory
+zinc spawn                                    # shows session picker if sessions exist
+zinc spawn "fix the bug"                      # start with a prompt
+zinc spawn --new                              # skip session picker, always start fresh
+zinc spawn --new "fix the bug"                # new session with a prompt
+zinc spawn --agent codex --dir ~/project      # explicit agent and directory
 ```
+
+**Arguments:**
+- `<prompt>` - initial prompt text (positional, optional)
 
 **Flags:**
 - `--agent <name>` - provider to use (default: from config, or `claude`)
 - `--dir <path>` - working directory (default: current directory)
 - `--id <name>` - agent ID (default: derived from directory name)
-- `--resume` - resume previous conversation
-- `--prompt <text>` - initial prompt
-- `--yes` / `-y` - skip interactive prompts
+- `--new` - skip session picker, always start a new session
 
 ### `zinc attach`
 
@@ -118,9 +118,8 @@ For Claude Code, state is detected via hooks (immediate, distinguishes `input` f
 
 ```toml
 [spawn]
-agent = "claude"                       # default provider
+default_agent = "claude"               # default provider (alias: agent)
 namer = "yawn prettify {dir}"          # derive agent ID from directory
-interactive = true                     # prompt for missing values on spawn
 
 [daemon]
 scrollback = 1048576                   # scrollback buffer size in bytes (1MB)
@@ -161,7 +160,7 @@ zinc and [yawn](https://github.com/ComeBertrand/yawn) are independent tools that
 # Create worktree + spawn agent
 yawn create fix-auth --init
 cd "$(yawn resolve fix-auth)"
-zinc spawn --prompt "fix the auth bug"
+zinc spawn "fix the auth bug"
 
 # Later: attach from the worktree
 cd "$(yawn resolve fix-auth)"
@@ -173,10 +172,10 @@ Shell function for the common case:
 ```bash
 yagent() {
   yawn create "$1" --init
-  zinc spawn --dir "$(yawn resolve "$1")" -y "${@:2}"
+  zinc spawn --new --dir "$(yawn resolve "$1")" "${@:2}"
 }
 
-yagent fix-auth --prompt "fix the auth bug"
+yagent fix-auth "fix the auth bug"
 ```
 
 ## Architecture
