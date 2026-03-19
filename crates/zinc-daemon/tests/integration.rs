@@ -69,7 +69,7 @@ async fn spawn_and_list() {
             dir: PathBuf::from("/tmp"),
             id: Some("test-agent".into()),
             args: vec!["3600".into()],
-            resume: false,
+            resume_session: None,
             prompt: None,
         },
     )
@@ -102,7 +102,7 @@ async fn spawn_duplicate_id() {
         dir: PathBuf::from("/tmp"),
         id: Some("dupe".into()),
         args: vec!["3600".into()],
-        resume: false,
+        resume_session: None,
         prompt: None,
     };
 
@@ -129,7 +129,7 @@ async fn spawn_invalid_directory() {
             dir: PathBuf::from("/nonexistent/path/that/does/not/exist"),
             id: Some("bad-dir".into()),
             args: vec!["1".into()],
-            resume: false,
+            resume_session: None,
             prompt: None,
         },
     )
@@ -153,7 +153,7 @@ async fn kill_agent() {
             dir: PathBuf::from("/tmp"),
             id: Some("to-kill".into()),
             args: vec!["3600".into()],
-            resume: false,
+            resume_session: None,
             prompt: None,
         },
     )
@@ -201,7 +201,7 @@ async fn auto_generated_ids() {
             dir: PathBuf::from("/tmp"),
             id: None,
             args: vec!["3600".into()],
-            resume: false,
+            resume_session: None,
             prompt: None,
         },
     )
@@ -218,7 +218,7 @@ async fn auto_generated_ids() {
             dir: PathBuf::from("/tmp"),
             id: None,
             args: vec!["3600".into()],
-            resume: false,
+            resume_session: None,
             prompt: None,
         },
     )
@@ -261,7 +261,7 @@ async fn shutdown_kills_all() {
             dir: PathBuf::from("/tmp"),
             id: Some("a".into()),
             args: vec!["3600".into()],
-            resume: false,
+            resume_session: None,
             prompt: None,
         },
     )
@@ -273,7 +273,7 @@ async fn shutdown_kills_all() {
             dir: PathBuf::from("/tmp"),
             id: Some("b".into()),
             args: vec!["3600".into()],
-            resume: false,
+            resume_session: None,
             prompt: None,
         },
     )
@@ -297,7 +297,7 @@ async fn exited_process_is_cleaned_up() {
             dir: PathBuf::from("/tmp"),
             id: Some("quick".into()),
             args: vec![],
-            resume: false,
+            resume_session: None,
             prompt: None,
         },
     )
@@ -328,7 +328,7 @@ async fn failed_process_is_cleaned_up() {
             dir: PathBuf::from("/tmp"),
             id: Some("fail".into()),
             args: vec![],
-            resume: false,
+            resume_session: None,
             prompt: None,
         },
     )
@@ -379,7 +379,7 @@ async fn attach_receives_scrollback() {
             dir: PathBuf::from("/tmp"),
             id: Some("echo-test".into()),
             args: vec!["-c".into(), "echo hello".into()],
-            resume: false,
+            resume_session: None,
             prompt: None,
         },
     )
@@ -431,7 +431,7 @@ async fn attach_relays_input_and_output() {
             dir: PathBuf::from("/tmp"),
             id: Some("cat-test".into()),
             args: vec![],
-            resume: false,
+            resume_session: None,
             prompt: None,
         },
     )
@@ -505,7 +505,7 @@ async fn generic_agent_transitions_to_idle() {
             dir: PathBuf::from("/tmp"),
             id: Some("idle-test".into()),
             args: vec!["-c".into(), "echo hello; sleep 3600".into()],
-            resume: false,
+            resume_session: None,
             prompt: None,
         },
     )
@@ -548,7 +548,7 @@ async fn events_pushed_on_agent_exit() {
             dir: PathBuf::from("/tmp"),
             id: Some("ev-test".into()),
             args: vec![],
-            resume: false,
+            resume_session: None,
             prompt: None,
         },
     )
@@ -603,7 +603,7 @@ async fn hook_event_updates_claude_agent_state() {
             id: Some("hook-test".into()),
             // Use sleep as the actual binary since claude isn't installed in CI
             args: vec![],
-            resume: false,
+            resume_session: None,
             prompt: None,
         },
     )
@@ -640,7 +640,7 @@ async fn hook_event_updates_claude_agent_state() {
             dir: PathBuf::from("/tmp"),
             id: Some("hook-test2".into()),
             args: vec!["3600".into()],
-            resume: false,
+            resume_session: None,
             prompt: None,
         },
     )
@@ -692,7 +692,7 @@ async fn spawn_emits_event() {
             dir: PathBuf::from("/tmp"),
             id: Some("spawn-evt".into()),
             args: vec!["3600".into()],
-            resume: false,
+            resume_session: None,
             prompt: None,
         },
     )
@@ -742,7 +742,7 @@ async fn kill_emits_event() {
             dir: PathBuf::from("/tmp"),
             id: Some("kill-evt".into()),
             args: vec!["3600".into()],
-            resume: false,
+            resume_session: None,
             prompt: None,
         },
     )

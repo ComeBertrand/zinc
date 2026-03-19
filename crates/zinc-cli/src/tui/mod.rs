@@ -15,6 +15,7 @@ use ratatui::Terminal;
 use zinc_proto::{AgentInfo, ServerMessage};
 
 use crate::client::{self, Client};
+use crate::config;
 
 use self::app::App;
 
@@ -37,6 +38,7 @@ pub async fn run() -> Result<()> {
         "TUI requires an interactive terminal"
     );
 
+    let config = config::load_config()?;
     let mut client = Client::connect().await?;
 
     // Fetch initial agent list
@@ -54,7 +56,7 @@ pub async fn run() -> Result<()> {
     let mut app = App::new();
     app.set_agents(agents);
 
-    let result = run_loop(&mut terminal, &mut app, &mut client).await;
+    let result = run_loop(&mut terminal, &mut app, &mut client, &config.default_agent).await;
 
     // Restore terminal
     terminal::disable_raw_mode()?;
@@ -97,6 +99,7 @@ async fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     app: &mut App,
     client: &mut Client,
+    default_agent: &str,
 ) -> Result<()> {
     let (mut ct_rx, ct_active) = spawn_crossterm_reader();
 
@@ -157,7 +160,7 @@ async fn run_loop(
                 app.set_agents(fetch_agents(client).await?);
             }
             Action::Spawn => {
-                spawn_agent(client, app).await?;
+                spawn_agent(client, app, default_agent).await?;
                 app.set_agents(fetch_agents(client).await?);
             }
             Action::Kill { id } => {
@@ -220,15 +223,15 @@ fn draw_status_bar(id: &str, provider: &str, cols: u16, rows: u16) {
     let _ = out.flush();
 }
 
-async fn spawn_agent(client: &mut Client, app: &mut App) -> Result<()> {
+async fn spawn_agent(client: &mut Client, app: &mut App, default_agent: &str) -> Result<()> {
     let dir = std::env::current_dir()?;
     let resp = client
         .send(zinc_proto::Request::Spawn {
-            provider: "claude".into(),
+            provider: default_agent.into(),
             dir,
             id: None,
             args: vec![],
-            resume: false,
+            resume_session: None,
             prompt: None,
         })
         .await?;

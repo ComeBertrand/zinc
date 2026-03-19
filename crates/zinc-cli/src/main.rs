@@ -6,6 +6,7 @@ use clap::Parser;
 mod cli;
 mod client;
 mod config;
+mod sessions;
 mod tui;
 
 use cli::{Cli, Commands};
@@ -25,47 +26,42 @@ async fn main() -> Result<()> {
             agent,
             dir,
             id,
-            resume,
             prompt,
-            yes,
+            new,
             args,
         } => {
             let dir = std::fs::canonicalize(&dir)
                 .map_err(|e| anyhow::anyhow!("invalid directory '{}': {}", dir.display(), e))?;
 
-            // Resolve spawn parameters: interactive prompts or flags/defaults
-            let use_interactive = !yes && config.interactive && std::io::stdin().is_terminal();
+            // Resolve agent: --agent flag → config.default_agent
+            let agent = agent.unwrap_or_else(|| config.default_agent.clone());
 
-            let params = if use_interactive {
-                let mut stdin = std::io::stdin().lock();
-                let mut stderr = std::io::stderr();
-                config::interactive_spawn_params(
-                    &mut stdin,
-                    &mut stderr,
-                    &config.agent,
-                    agent.as_deref(),
-                    resume,
-                    prompt.as_deref(),
-                )?
+            config::validate_provider(&agent)?;
+            let id = Some(config::resolve_id(id, config.namer.as_deref(), &dir)?);
+
+            // Resolve session: --new or non-terminal → None, else show picker
+            let resume_session = if new || !std::io::stdin().is_terminal() {
+                None
             } else {
-                config::SpawnParams {
-                    agent: agent.unwrap_or_else(|| config.agent.clone()),
-                    resume,
-                    prompt,
+                let found = sessions::list_sessions(&agent, &dir);
+                if found.is_empty() {
+                    None
+                } else {
+                    let mut stdin = std::io::stdin().lock();
+                    let mut stderr = std::io::stderr();
+                    config::pick_session(&mut stdin, &mut stderr, &found)?
                 }
             };
 
-            config::validate_provider(&params.agent)?;
-            let id = Some(config::resolve_id(id, config.namer.as_deref(), &dir)?);
             let mut client = client::Client::connect().await?;
             let resp = client
                 .send(zinc_proto::Request::Spawn {
-                    provider: params.agent,
+                    provider: agent,
                     dir,
                     id,
                     args,
-                    resume: params.resume,
-                    prompt: params.prompt,
+                    resume_session,
+                    prompt,
                 })
                 .await?;
             match resp {

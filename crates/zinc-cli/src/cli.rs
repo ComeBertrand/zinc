@@ -13,7 +13,7 @@ pub struct Cli {
 pub enum Commands {
     /// Launch a new agent
     Spawn {
-        /// Agent tool to use (e.g. claude)
+        /// Agent tool to use (e.g. claude, codex)
         #[arg(long)]
         agent: Option<String>,
 
@@ -25,17 +25,12 @@ pub enum Commands {
         #[arg(long)]
         id: Option<String>,
 
-        /// Resume previous conversation
-        #[arg(long)]
-        resume: bool,
-
-        /// Initial prompt text
-        #[arg(long)]
+        /// Initial prompt text (e.g. `zinc spawn "Fix this issue ..."`)
         prompt: Option<String>,
 
-        /// Skip interactive prompts, use defaults
-        #[arg(long, short = 'y')]
-        yes: bool,
+        /// Skip session picker, always start a new session
+        #[arg(long)]
+        new: bool,
 
         /// Extra arguments passed to the agent command
         #[arg(last = true)]

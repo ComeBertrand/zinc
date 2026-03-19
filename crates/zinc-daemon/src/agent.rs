@@ -45,14 +45,14 @@ impl Agent {
         provider: Arc<dyn Provider>,
         dir: &Path,
         args: &[String],
-        resume: bool,
+        resume_session: Option<&str>,
         prompt: Option<&str>,
         env_vars: &[(&str, &str)],
     ) -> Result<Self> {
         // Verify directory exists
         anyhow::ensure!(dir.is_dir(), "directory does not exist: {}", dir.display());
 
-        let mut cmd = provider.build_command(dir, args, resume, prompt);
+        let mut cmd = provider.build_command(dir, args, resume_session, prompt);
         for (key, val) in env_vars {
             cmd.env(key, val);
         }

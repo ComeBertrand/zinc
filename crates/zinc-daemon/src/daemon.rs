@@ -365,9 +365,9 @@ async fn dispatch(request: Request, state: &Arc<Mutex<DaemonState>>) -> Response
             dir,
             id,
             args,
-            resume,
+            resume_session,
             prompt,
-        } => handle_spawn(state, provider, dir, id, args, resume, prompt).await,
+        } => handle_spawn(state, provider, dir, id, args, resume_session, prompt).await,
         Request::List => handle_list(state).await,
         Request::Kill { id } => handle_kill(state, &id).await,
         Request::Attach { id, .. } => Response::Error {
@@ -387,7 +387,7 @@ async fn handle_spawn(
     dir: PathBuf,
     id: Option<String>,
     args: Vec<String>,
-    resume: bool,
+    resume_session: Option<String>,
     prompt: Option<String>,
 ) -> Response {
     let mut state = state.lock().await;
@@ -411,7 +411,7 @@ async fn handle_spawn(
     ];
 
     let resolved = Arc::from(provider::resolve(&provider));
-    match Agent::spawn(resolved, &dir, &args, resume, prompt.as_deref(), &env_vars) {
+    match Agent::spawn(resolved, &dir, &args, resume_session.as_deref(), prompt.as_deref(), &env_vars) {
         Ok(agent) => {
             info!(id = %id, provider = %provider, dir = %dir.display(), "spawned agent");
             let info = agent.info(&id);

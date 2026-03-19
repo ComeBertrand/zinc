@@ -7,20 +7,13 @@ use std::path::PathBuf;
 pub struct ConfigFile {
     pub spawn: Option<SpawnConfig>,
     pub daemon: Option<DaemonConfig>,
-    pub notify: Option<NotifyConfig>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct NotifyConfig {
-    pub command: Option<String>,
-    pub on_states: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct SpawnConfig {
-    pub agent: Option<String>,
+    #[serde(alias = "agent")]
+    pub default_agent: Option<String>,
     pub namer: Option<String>,
-    pub interactive: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -32,12 +25,10 @@ pub struct DaemonConfig {
 #[derive(Debug)]
 pub struct Config {
     /// Default provider for `zinc spawn` (default: "claude").
-    pub agent: String,
+    pub default_agent: String,
     /// Command template to derive agent ID from directory.
     /// `{dir}` is replaced with the shell-quoted directory path.
     pub namer: Option<String>,
-    /// Whether `zinc spawn` prompts interactively for missing values (default: true).
-    pub interactive: bool,
     /// Scrollback buffer size in bytes (default: 1MB).
     pub scrollback: usize,
 }
@@ -45,9 +36,8 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            agent: "claude".into(),
+            default_agent: "claude".into(),
             namer: None,
-            interactive: true,
             scrollback: 1_048_576,
         }
     }
@@ -58,19 +48,13 @@ pub fn parse_config(toml_str: &str) -> Result<Config> {
     let file: ConfigFile = toml::from_str(toml_str)?;
     let defaults = Config::default();
 
-    let agent = file
+    let default_agent = file
         .spawn
         .as_ref()
-        .and_then(|s| s.agent.clone())
-        .unwrap_or(defaults.agent);
+        .and_then(|s| s.default_agent.clone())
+        .unwrap_or(defaults.default_agent);
 
     let namer = file.spawn.as_ref().and_then(|s| s.namer.clone());
-
-    let interactive = file
-        .spawn
-        .as_ref()
-        .and_then(|s| s.interactive)
-        .unwrap_or(defaults.interactive);
 
     let scrollback = file
         .daemon
@@ -79,9 +63,8 @@ pub fn parse_config(toml_str: &str) -> Result<Config> {
         .unwrap_or(defaults.scrollback);
 
     Ok(Config {
-        agent,
+        default_agent,
         namer,
-        interactive,
         scrollback,
     })
 }
@@ -190,72 +173,44 @@ pub fn find_agents_in_dir(agents: &[zinc_proto::AgentInfo], dir: &std::path::Pat
         .collect()
 }
 
-/// Resolved parameters for spawning an agent.
-pub struct SpawnParams {
-    pub agent: String,
-    pub resume: bool,
-    pub prompt: Option<String>,
+/// Display info for a session in the picker.
+pub struct SessionDisplay {
+    pub id: String,
+    pub summary: String,
+    pub age: String,
 }
 
-/// Interactively prompt for spawn parameters.
-/// Each field that's already set (via CLI flags) skips its question.
-/// `reader` is injectable for testing.
-pub fn interactive_spawn_params(
+/// Show a numbered session picker and return the selected session ID, or None for "new".
+/// `reader` and `writer` are injectable for testing.
+pub fn pick_session(
     reader: &mut dyn std::io::BufRead,
     writer: &mut dyn std::io::Write,
-    default_agent: &str,
-    cli_agent: Option<&str>,
-    cli_resume: bool,
-    cli_prompt: Option<&str>,
-) -> Result<SpawnParams> {
-    // Agent
-    let agent = if let Some(a) = cli_agent {
-        a.to_string()
-    } else {
-        write!(writer, "Agent [{}]: ", default_agent)?;
-        writer.flush()?;
-        let mut line = String::new();
-        reader.read_line(&mut line)?;
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            default_agent.to_string()
-        } else {
-            trimmed.to_string()
+    sessions: &[SessionDisplay],
+) -> Result<Option<String>> {
+    writeln!(writer, "  1) new session (default)")?;
+    for (i, s) in sessions.iter().enumerate() {
+        writeln!(writer, "  {}) {} — {}", i + 2, s.summary, s.age)?;
+    }
+    write!(writer, "Pick session [1]: ")?;
+    writer.flush()?;
+
+    let mut line = String::new();
+    reader.read_line(&mut line)?;
+    let trimmed = line.trim();
+
+    if trimmed.is_empty() || trimmed == "1" {
+        return Ok(None);
+    }
+
+    match trimmed.parse::<usize>() {
+        Ok(n) if n >= 2 && n <= sessions.len() + 1 => {
+            Ok(Some(sessions[n - 2].id.clone()))
         }
-    };
-
-    // Resume
-    let resume = if cli_resume {
-        true
-    } else {
-        write!(writer, "Resume previous session? [y/N]: ")?;
-        writer.flush()?;
-        let mut line = String::new();
-        reader.read_line(&mut line)?;
-        matches!(line.trim(), "y" | "Y" | "yes" | "Yes")
-    };
-
-    // Prompt
-    let prompt = if let Some(p) = cli_prompt {
-        Some(p.to_string())
-    } else {
-        write!(writer, "Starting prompt (optional, enter to skip): ")?;
-        writer.flush()?;
-        let mut line = String::new();
-        reader.read_line(&mut line)?;
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_string())
+        _ => {
+            writeln!(writer, "Invalid choice, starting new session.")?;
+            Ok(None)
         }
-    };
-
-    Ok(SpawnParams {
-        agent,
-        resume,
-        prompt,
-    })
+    }
 }
 
 /// Known agent providers. The CLI rejects unknown providers.
@@ -408,18 +363,16 @@ mod tests {
     #[test]
     fn defaults() {
         let config = Config::default();
-        assert_eq!(config.agent, "claude");
+        assert_eq!(config.default_agent, "claude");
         assert!(config.namer.is_none());
-        assert!(config.interactive);
         assert_eq!(config.scrollback, 1_048_576);
     }
 
     #[test]
     fn parse_empty_toml() {
         let config = parse_config("").unwrap();
-        assert_eq!(config.agent, "claude");
+        assert_eq!(config.default_agent, "claude");
         assert!(config.namer.is_none());
-        assert!(config.interactive);
         assert_eq!(config.scrollback, 1_048_576);
     }
 
@@ -427,26 +380,23 @@ mod tests {
     fn parse_spawn_section() {
         let toml = r#"
 [spawn]
-agent = "codex"
+default_agent = "codex"
 namer = "basename {dir}"
-interactive = false
 "#;
         let config = parse_config(toml).unwrap();
-        assert_eq!(config.agent, "codex");
+        assert_eq!(config.default_agent, "codex");
         assert_eq!(config.namer.unwrap(), "basename {dir}");
-        assert!(!config.interactive);
     }
 
     #[test]
-    fn parse_partial_spawn() {
+    fn parse_spawn_agent_alias() {
         let toml = r#"
 [spawn]
 agent = "codex"
 "#;
         let config = parse_config(toml).unwrap();
-        assert_eq!(config.agent, "codex");
+        assert_eq!(config.default_agent, "codex");
         assert!(config.namer.is_none());
-        assert!(config.interactive); // default preserved
     }
 
     #[test]
@@ -463,17 +413,15 @@ scrollback = 2097152
     fn parse_full_config() {
         let toml = r#"
 [spawn]
-agent = "claude"
+default_agent = "claude"
 namer = "yawn prettify {dir}"
-interactive = true
 
 [daemon]
 scrollback = 524288
 "#;
         let config = parse_config(toml).unwrap();
-        assert_eq!(config.agent, "claude");
+        assert_eq!(config.default_agent, "claude");
         assert_eq!(config.namer.unwrap(), "yawn prettify {dir}");
-        assert!(config.interactive);
         assert_eq!(config.scrollback, 524_288);
     }
 
@@ -487,12 +435,12 @@ scrollback = 524288
     fn parse_unknown_fields_ignored() {
         let toml = r#"
 [spawn]
-agent = "claude"
+default_agent = "claude"
 unknown_field = "ignored"
 "#;
         // serde ignores unknown fields by default
         let config = parse_config(toml).unwrap();
-        assert_eq!(config.agent, "claude");
+        assert_eq!(config.default_agent, "claude");
     }
 
     #[test]
@@ -641,61 +589,63 @@ unknown_field = "ignored"
         assert_eq!(id, "project");
     }
 
-    /// Helper to run interactive_spawn_params with simulated stdin.
-    fn interactive(
-        input: &str,
-        agent: Option<&str>,
-        resume: bool,
-        prompt: Option<&str>,
-    ) -> SpawnParams {
-        let mut reader = std::io::Cursor::new(input.as_bytes().to_vec());
+    fn make_sessions() -> Vec<SessionDisplay> {
+        vec![
+            SessionDisplay {
+                id: "sess-1".into(),
+                summary: "fix auth bug".into(),
+                age: "2h ago".into(),
+            },
+            SessionDisplay {
+                id: "sess-2".into(),
+                summary: "add tests".into(),
+                age: "1d ago".into(),
+            },
+        ]
+    }
+
+    #[test]
+    fn pick_session_default_is_new() {
+        let sessions = make_sessions();
+        let mut reader = std::io::Cursor::new(b"\n".to_vec());
         let mut writer = Vec::new();
-        interactive_spawn_params(&mut reader, &mut writer, "claude", agent, resume, prompt).unwrap()
+        let result = pick_session(&mut reader, &mut writer, &sessions).unwrap();
+        assert!(result.is_none());
     }
 
     #[test]
-    fn interactive_all_defaults() {
-        // User presses enter for everything
-        let params = interactive("\n\n\n", None, false, None);
-        assert_eq!(params.agent, "claude");
-        assert!(!params.resume);
-        assert!(params.prompt.is_none());
+    fn pick_session_explicit_new() {
+        let sessions = make_sessions();
+        let mut reader = std::io::Cursor::new(b"1\n".to_vec());
+        let mut writer = Vec::new();
+        let result = pick_session(&mut reader, &mut writer, &sessions).unwrap();
+        assert!(result.is_none());
     }
 
     #[test]
-    fn interactive_custom_agent() {
-        let params = interactive("codex\n\n\n", None, false, None);
-        assert_eq!(params.agent, "codex");
+    fn pick_session_select_first_session() {
+        let sessions = make_sessions();
+        let mut reader = std::io::Cursor::new(b"2\n".to_vec());
+        let mut writer = Vec::new();
+        let result = pick_session(&mut reader, &mut writer, &sessions).unwrap();
+        assert_eq!(result.as_deref(), Some("sess-1"));
     }
 
     #[test]
-    fn interactive_resume_yes() {
-        let params = interactive("\ny\n\n", None, false, None);
-        assert_eq!(params.agent, "claude");
-        assert!(params.resume);
+    fn pick_session_select_second_session() {
+        let sessions = make_sessions();
+        let mut reader = std::io::Cursor::new(b"3\n".to_vec());
+        let mut writer = Vec::new();
+        let result = pick_session(&mut reader, &mut writer, &sessions).unwrap();
+        assert_eq!(result.as_deref(), Some("sess-2"));
     }
 
     #[test]
-    fn interactive_with_prompt() {
-        let params = interactive("\n\nfix the bug\n", None, false, None);
-        assert_eq!(params.prompt.unwrap(), "fix the bug");
-    }
-
-    #[test]
-    fn interactive_flags_skip_questions() {
-        // All flags provided — no stdin needed
-        let params = interactive("", Some("claude"), true, Some("do stuff"));
-        assert_eq!(params.agent, "claude");
-        assert!(params.resume);
-        assert_eq!(params.prompt.unwrap(), "do stuff");
-    }
-
-    #[test]
-    fn interactive_partial_flags() {
-        // Agent provided via flag, resume and prompt interactive
-        let params = interactive("y\nhello world\n", Some("claude"), false, None);
-        assert_eq!(params.agent, "claude");
-        assert!(params.resume);
-        assert_eq!(params.prompt.unwrap(), "hello world");
+    fn pick_session_invalid_choice_gives_new() {
+        let sessions = make_sessions();
+        let mut reader = std::io::Cursor::new(b"99\n".to_vec());
+        let mut writer = Vec::new();
+        let result = pick_session(&mut reader, &mut writer, &sessions).unwrap();
+        assert!(result.is_none());
     }
 }

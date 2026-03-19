@@ -34,7 +34,7 @@ pub trait Provider: Send + Sync {
         &self,
         dir: &Path,
         args: &[String],
-        resume: bool,
+        resume_session: Option<&str>,
         prompt: Option<&str>,
     ) -> Command;
 
@@ -72,13 +72,13 @@ impl Provider for ClaudeProvider {
         &self,
         dir: &Path,
         args: &[String],
-        resume: bool,
+        resume_session: Option<&str>,
         prompt: Option<&str>,
     ) -> Command {
         let mut cmd = Command::new("claude");
         cmd.current_dir(dir);
-        if resume {
-            cmd.arg("--resume");
+        if let Some(id) = resume_session {
+            cmd.arg("--resume").arg(id);
         }
         cmd.args(args);
         if let Some(text) = prompt {
@@ -221,12 +221,12 @@ impl Provider for CodexProvider {
         &self,
         dir: &Path,
         args: &[String],
-        resume: bool,
+        resume_session: Option<&str>,
         prompt: Option<&str>,
     ) -> Command {
         let mut cmd = Command::new("codex");
-        if resume {
-            cmd.arg("resume").arg("--last");
+        if let Some(id) = resume_session {
+            cmd.arg("resume").arg(id);
         }
         cmd.arg("-C").arg(dir);
         cmd.args(args);
@@ -413,7 +413,7 @@ impl Provider for GenericProvider {
         &self,
         dir: &Path,
         args: &[String],
-        _resume: bool,
+        _resume_session: Option<&str>,
         _prompt: Option<&str>,
     ) -> Command {
         let mut cmd = Command::new(&self.command);
@@ -459,7 +459,7 @@ mod tests {
         let p = ClaudeProvider;
         assert_eq!(p.name(), "claude");
 
-        let cmd = p.build_command(&PathBuf::from("/tmp"), &["--verbose".into()], false, None);
+        let cmd = p.build_command(&PathBuf::from("/tmp"), &["--verbose".into()], None, None);
         assert_eq!(cmd.get_program(), "claude");
         assert_eq!(cmd.get_current_dir(), Some(Path::new("/tmp")));
         let args: Vec<_> = cmd.get_args().collect();
@@ -467,27 +467,27 @@ mod tests {
     }
 
     #[test]
-    fn claude_resume_flag() {
+    fn claude_resume_session() {
         let p = ClaudeProvider;
-        let cmd = p.build_command(&PathBuf::from("/tmp"), &[], true, None);
+        let cmd = p.build_command(&PathBuf::from("/tmp"), &[], Some("abc-123"), None);
         let args: Vec<_> = cmd.get_args().collect();
-        assert_eq!(args, &["--resume"]);
+        assert_eq!(args, &["--resume", "abc-123"]);
     }
 
     #[test]
     fn claude_prompt_arg() {
         let p = ClaudeProvider;
-        let cmd = p.build_command(&PathBuf::from("/tmp"), &[], false, Some("fix the bug"));
+        let cmd = p.build_command(&PathBuf::from("/tmp"), &[], None, Some("fix the bug"));
         let args: Vec<_> = cmd.get_args().collect();
         assert_eq!(args, &["fix the bug"]);
     }
 
     #[test]
-    fn claude_resume_and_prompt() {
+    fn claude_resume_session_and_prompt() {
         let p = ClaudeProvider;
-        let cmd = p.build_command(&PathBuf::from("/tmp"), &[], true, Some("fix the bug"));
+        let cmd = p.build_command(&PathBuf::from("/tmp"), &[], Some("abc-123"), Some("fix the bug"));
         let args: Vec<_> = cmd.get_args().collect();
-        assert_eq!(args, &["--resume", "fix the bug"]);
+        assert_eq!(args, &["--resume", "abc-123", "fix the bug"]);
     }
 
     #[test]
@@ -504,7 +504,7 @@ mod tests {
         let p = GenericProvider::new("codex");
         assert_eq!(p.name(), "codex");
 
-        let cmd = p.build_command(&PathBuf::from("/home"), &[], false, None);
+        let cmd = p.build_command(&PathBuf::from("/home"), &[], None, None);
         assert_eq!(cmd.get_program(), "codex");
     }
 
@@ -660,34 +660,34 @@ mod tests {
         let p = CodexProvider;
         assert_eq!(p.name(), "codex");
 
-        let cmd = p.build_command(&PathBuf::from("/tmp/project"), &[], false, None);
+        let cmd = p.build_command(&PathBuf::from("/tmp/project"), &[], None, None);
         assert_eq!(cmd.get_program(), "codex");
         let args: Vec<_> = cmd.get_args().collect();
         assert_eq!(args, &["-C", "/tmp/project"]);
     }
 
     #[test]
-    fn codex_resume_flag() {
+    fn codex_resume_session() {
         let p = CodexProvider;
-        let cmd = p.build_command(&PathBuf::from("/tmp"), &[], true, None);
+        let cmd = p.build_command(&PathBuf::from("/tmp"), &[], Some("sess-456"), None);
         let args: Vec<_> = cmd.get_args().collect();
-        assert_eq!(args, &["resume", "--last", "-C", "/tmp"]);
+        assert_eq!(args, &["resume", "sess-456", "-C", "/tmp"]);
     }
 
     #[test]
     fn codex_prompt_arg() {
         let p = CodexProvider;
-        let cmd = p.build_command(&PathBuf::from("/tmp"), &[], false, Some("fix the bug"));
+        let cmd = p.build_command(&PathBuf::from("/tmp"), &[], None, Some("fix the bug"));
         let args: Vec<_> = cmd.get_args().collect();
         assert_eq!(args, &["-C", "/tmp", "fix the bug"]);
     }
 
     #[test]
-    fn codex_resume_and_prompt() {
+    fn codex_resume_session_and_prompt() {
         let p = CodexProvider;
-        let cmd = p.build_command(&PathBuf::from("/tmp"), &[], true, Some("fix the bug"));
+        let cmd = p.build_command(&PathBuf::from("/tmp"), &[], Some("sess-456"), Some("fix the bug"));
         let args: Vec<_> = cmd.get_args().collect();
-        assert_eq!(args, &["resume", "--last", "-C", "/tmp", "fix the bug"]);
+        assert_eq!(args, &["resume", "sess-456", "-C", "/tmp", "fix the bug"]);
     }
 
     #[test]

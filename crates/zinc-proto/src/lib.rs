@@ -54,8 +54,8 @@ pub enum Request {
         id: Option<String>,
         #[serde(default)]
         args: Vec<String>,
-        #[serde(default)]
-        resume: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resume_session: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         prompt: Option<String>,
     },
@@ -179,7 +179,7 @@ mod tests {
             dir: PathBuf::from("/tmp"),
             id: Some("fix-auth".into()),
             args: vec!["--verbose".into()],
-            resume: false,
+            resume_session: None,
             prompt: None,
         };
         let json = serde_json::to_string(&req).unwrap();
@@ -208,7 +208,7 @@ mod tests {
             dir: PathBuf::from("/tmp"),
             id: None,
             args: vec![],
-            resume: false,
+            resume_session: None,
             prompt: None,
         };
         let json = serde_json::to_string(&req).unwrap();
@@ -327,7 +327,7 @@ mod tests {
                 dir,
                 id,
                 args,
-                resume,
+                resume_session,
                 prompt,
             } => {
                 assert_eq!(provider, "claude");
@@ -335,7 +335,7 @@ mod tests {
                 assert_eq!(id, None);
                 assert!(args.is_empty());
                 // Backward compat: missing fields default correctly
-                assert!(!resume);
+                assert!(resume_session.is_none());
                 assert!(prompt.is_none());
             }
             _ => panic!("wrong variant"),
