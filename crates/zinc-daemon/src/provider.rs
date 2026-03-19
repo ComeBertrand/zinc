@@ -206,6 +206,187 @@ fn find_last_usage(content: &str) -> Option<(ClaudeUsage, Option<String>)> {
     None
 }
 
+/// Codex CLI provider.
+///
+/// State detection uses PTY idle heuristic (no useful hooks for per-turn detection).
+/// Context tracking reads Codex's JSONL session files.
+pub struct CodexProvider;
+
+impl Provider for CodexProvider {
+    fn name(&self) -> &str {
+        "codex"
+    }
+
+    fn build_command(
+        &self,
+        dir: &Path,
+        args: &[String],
+        resume: bool,
+        prompt: Option<&str>,
+    ) -> Command {
+        let mut cmd = Command::new("codex");
+        if resume {
+            cmd.arg("resume").arg("--last");
+        }
+        cmd.arg("-C").arg(dir);
+        cmd.args(args);
+        if let Some(text) = prompt {
+            cmd.arg(text);
+        }
+        cmd
+    }
+
+    fn detect_state_from_output(
+        &self,
+        _recent_output: &[u8],
+        idle_duration: Duration,
+    ) -> Option<AgentState> {
+        if idle_duration >= Duration::from_secs(5) {
+            Some(AgentState::Idle)
+        } else {
+            Some(AgentState::Working)
+        }
+    }
+
+    fn map_hook_event(&self, _event: &str) -> Option<AgentState> {
+        None
+    }
+
+    fn context_usage(&self, _pid: u32, dir: &Path) -> Option<ContextUsage> {
+        codex_context_usage(dir)
+    }
+}
+
+// --- Codex context usage parsing ---
+
+#[derive(Deserialize)]
+struct CodexJournalLine {
+    #[serde(rename = "type")]
+    line_type: Option<String>,
+    payload: Option<CodexPayload>,
+}
+
+#[derive(Deserialize)]
+struct CodexPayload {
+    #[serde(rename = "type")]
+    payload_type: Option<String>,
+    info: Option<CodexTokenInfo>,
+    // session_meta fields (flattened into payload)
+    cwd: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct CodexTokenInfo {
+    last_token_usage: Option<CodexTokenUsage>,
+    model_context_window: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct CodexTokenUsage {
+    #[serde(default)]
+    input_tokens: u64,
+}
+
+/// Find the most recent Codex session file matching the given working directory.
+fn find_codex_session(codex_dir: &Path, agent_dir: &Path) -> Option<PathBuf> {
+    let sessions_dir = codex_dir.join("sessions");
+    if !sessions_dir.is_dir() {
+        return None;
+    }
+
+    // Walk YYYY/MM/DD directories in reverse chronological order
+    let mut year_dirs: Vec<_> = std::fs::read_dir(&sessions_dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_dir())
+        .collect();
+    year_dirs.sort_by_key(|e| std::cmp::Reverse(e.file_name()));
+
+    for year in year_dirs {
+        let mut month_dirs: Vec<_> = std::fs::read_dir(year.path())
+            .ok()?
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().is_dir())
+            .collect();
+        month_dirs.sort_by_key(|e| std::cmp::Reverse(e.file_name()));
+
+        for month in month_dirs {
+            let mut day_dirs: Vec<_> = std::fs::read_dir(month.path())
+                .ok()?
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().is_dir())
+                .collect();
+            day_dirs.sort_by_key(|e| std::cmp::Reverse(e.file_name()));
+
+            for day in day_dirs {
+                // List JSONL files in this day, sorted by name descending (most recent first)
+                let mut files: Vec<_> = std::fs::read_dir(day.path())
+                    .ok()?
+                    .filter_map(|e| e.ok())
+                    .filter(|e| {
+                        e.path()
+                            .extension()
+                            .is_some_and(|ext| ext == "jsonl")
+                    })
+                    .collect();
+                files.sort_by_key(|e| std::cmp::Reverse(e.file_name()));
+
+                for file in files {
+                    // Read first line to check CWD
+                    if let Ok(content) = std::fs::read_to_string(file.path()) {
+                        if let Some(first_line) = content.lines().next() {
+                            if let Ok(meta) = serde_json::from_str::<CodexJournalLine>(first_line) {
+                                let cwd = meta
+                                    .payload
+                                    .as_ref()
+                                    .and_then(|p| p.cwd.as_deref());
+                                if cwd == Some(&agent_dir.to_string_lossy()) {
+                                    return Some(file.path());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+fn codex_context_usage(dir: &Path) -> Option<ContextUsage> {
+    let home = std::env::var("HOME").ok()?;
+    let codex_dir = PathBuf::from(&home).join(".codex");
+
+    let session_path = find_codex_session(&codex_dir, dir)?;
+    let content = std::fs::read_to_string(&session_path).ok()?;
+
+    // Find last token_count event
+    for line in content.lines().rev() {
+        let entry: CodexJournalLine = match serde_json::from_str(line) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        if entry.line_type.as_deref() != Some("event_msg") {
+            continue;
+        }
+        let payload = entry.payload?;
+        if payload.payload_type.as_deref() != Some("token_count") {
+            continue;
+        }
+        let info = payload.info?;
+        let usage = info.last_token_usage?;
+        let limit = info.model_context_window?;
+
+        return Some(ContextUsage {
+            used_tokens: usage.input_tokens,
+            limit_tokens: limit,
+        });
+    }
+
+    None
+}
+
 /// Generic provider for any CLI agent.
 ///
 /// Uses the provider name as the command and PTY activity heuristic for state detection.
@@ -263,6 +444,7 @@ impl Provider for GenericProvider {
 pub fn resolve(name: &str) -> Box<dyn Provider> {
     match name {
         "claude" => Box::new(ClaudeProvider),
+        "codex" => Box::new(CodexProvider),
         other => Box::new(GenericProvider::new(other)),
     }
 }
@@ -469,5 +651,101 @@ mod tests {
         let jsonl = "not json\n{\"type\":\"assistant\",\"message\":{\"usage\":{\"input_tokens\":42,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0}}}";
         let (usage, _) = find_last_usage(jsonl).unwrap();
         assert_eq!(usage.input_tokens, 42);
+    }
+
+    // --- Codex provider tests ---
+
+    #[test]
+    fn codex_provider_basics() {
+        let p = CodexProvider;
+        assert_eq!(p.name(), "codex");
+
+        let cmd = p.build_command(&PathBuf::from("/tmp/project"), &[], false, None);
+        assert_eq!(cmd.get_program(), "codex");
+        let args: Vec<_> = cmd.get_args().collect();
+        assert_eq!(args, &["-C", "/tmp/project"]);
+    }
+
+    #[test]
+    fn codex_resume_flag() {
+        let p = CodexProvider;
+        let cmd = p.build_command(&PathBuf::from("/tmp"), &[], true, None);
+        let args: Vec<_> = cmd.get_args().collect();
+        assert_eq!(args, &["resume", "--last", "-C", "/tmp"]);
+    }
+
+    #[test]
+    fn codex_prompt_arg() {
+        let p = CodexProvider;
+        let cmd = p.build_command(&PathBuf::from("/tmp"), &[], false, Some("fix the bug"));
+        let args: Vec<_> = cmd.get_args().collect();
+        assert_eq!(args, &["-C", "/tmp", "fix the bug"]);
+    }
+
+    #[test]
+    fn codex_resume_and_prompt() {
+        let p = CodexProvider;
+        let cmd = p.build_command(&PathBuf::from("/tmp"), &[], true, Some("fix the bug"));
+        let args: Vec<_> = cmd.get_args().collect();
+        assert_eq!(args, &["resume", "--last", "-C", "/tmp", "fix the bug"]);
+    }
+
+    #[test]
+    fn codex_pty_heuristic_working() {
+        let p = CodexProvider;
+        assert_eq!(
+            p.detect_state_from_output(b"output", Duration::from_secs(1)),
+            Some(AgentState::Working)
+        );
+    }
+
+    #[test]
+    fn codex_pty_heuristic_idle() {
+        let p = CodexProvider;
+        assert_eq!(
+            p.detect_state_from_output(b"", Duration::from_secs(6)),
+            Some(AgentState::Idle)
+        );
+    }
+
+    #[test]
+    fn codex_hook_always_none() {
+        let p = CodexProvider;
+        assert_eq!(p.map_hook_event("stop"), None);
+    }
+
+    #[test]
+    fn resolve_codex() {
+        let p = resolve("codex");
+        assert_eq!(p.name(), "codex");
+    }
+
+    #[test]
+    fn codex_find_last_token_count() {
+        // Simulate a Codex JSONL with a token_count event
+        let jsonl = r#"{"type":"session_meta","payload":{"cwd":"/tmp/project"}}
+{"type":"response_item","payload":{"type":"message","role":"user"}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":50000},"model_context_window":258400}}}"#;
+
+        // Parse the last token_count event directly (unit test for the parsing logic)
+        for line in jsonl.lines().rev() {
+            let entry: CodexJournalLine = match serde_json::from_str(line) {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            if entry.line_type.as_deref() != Some("event_msg") {
+                continue;
+            }
+            let payload = entry.payload.unwrap();
+            if payload.payload_type.as_deref() != Some("token_count") {
+                continue;
+            }
+            let info = payload.info.unwrap();
+            let usage = info.last_token_usage.unwrap();
+            assert_eq!(usage.input_tokens, 50000);
+            assert_eq!(info.model_context_window.unwrap(), 258400);
+            return;
+        }
+        panic!("token_count event not found");
     }
 }

@@ -259,7 +259,7 @@ pub fn interactive_spawn_params(
 }
 
 /// Known agent providers. The CLI rejects unknown providers.
-pub const KNOWN_PROVIDERS: &[&str] = &["claude"];
+pub const KNOWN_PROVIDERS: &[&str] = &["claude", "codex"];
 
 /// Validate that a provider name is in the known list.
 pub fn validate_provider(name: &str) -> anyhow::Result<()> {
