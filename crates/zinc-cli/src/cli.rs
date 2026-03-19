@@ -74,11 +74,12 @@ pub enum Commands {
     /// Check if the daemon is running
     Status,
 
-    /// Notify the daemon of a hook event (called by agent hooks)
+    /// Notify the daemon of a hook event (called by agent hooks).
+    /// Silently exits if not running under zinc (no ZINC_AGENT_ID).
     HookNotify {
-        /// Agent ID (defaults to $ZINC_AGENT_ID)
+        /// Agent ID (defaults to $ZINC_AGENT_ID; exits quietly if absent)
         #[arg(long, env = "ZINC_AGENT_ID")]
-        agent: String,
+        agent: Option<String>,
 
         /// Hook event name (e.g. stop, notification:permission_prompt)
         #[arg(long)]

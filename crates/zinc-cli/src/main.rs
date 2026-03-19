@@ -187,16 +187,18 @@ async fn main() -> Result<()> {
         },
 
         Commands::HookNotify { agent, event } => {
-            let mut client = client::Client::connect().await?;
-            let resp = client
-                .send(zinc_proto::Request::HookEvent {
-                    agent_id: agent,
-                    event,
-                })
-                .await?;
-            if let zinc_proto::Response::Error { message } = resp {
-                eprintln!("Error: {}", message);
-                std::process::exit(1);
+            // Not running under zinc — silently succeed so hooks don't block the agent
+            let Some(agent) = agent else {
+                return Ok(());
+            };
+            // Best-effort: if daemon isn't running or rejects the event, don't block the agent
+            if let Ok(mut client) = client::Client::connect().await {
+                let _ = client
+                    .send(zinc_proto::Request::HookEvent {
+                        agent_id: agent,
+                        event,
+                    })
+                    .await;
             }
         }
     }
