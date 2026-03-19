@@ -411,7 +411,14 @@ async fn handle_spawn(
     ];
 
     let resolved = Arc::from(provider::resolve(&provider));
-    match Agent::spawn(resolved, &dir, &args, resume_session.as_deref(), prompt.as_deref(), &env_vars) {
+    match Agent::spawn(
+        resolved,
+        &dir,
+        &args,
+        resume_session.as_deref(),
+        prompt.as_deref(),
+        &env_vars,
+    ) {
         Ok(agent) => {
             info!(id = %id, provider = %provider, dir = %dir.display(), "spawned agent");
             let info = agent.info(&id);

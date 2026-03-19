@@ -166,9 +166,8 @@ fn claude_context_usage(pid: u32, dir: &Path) -> Option<ContextUsage> {
     let content = std::fs::read_to_string(&jsonl_path).ok()?;
     let (usage, model) = find_last_usage(&content)?;
 
-    let used = usage.input_tokens
-        + usage.cache_creation_input_tokens
-        + usage.cache_read_input_tokens;
+    let used =
+        usage.input_tokens + usage.cache_creation_input_tokens + usage.cache_read_input_tokens;
 
     // Context limit: 1M if model has [1m] suffix or tokens already exceed 200k
     let limit = if model.as_deref().is_some_and(|m| m.contains("[1m]")) || used > 180_000 {
@@ -323,11 +322,7 @@ fn find_codex_session(codex_dir: &Path, agent_dir: &Path) -> Option<PathBuf> {
                 let mut files: Vec<_> = std::fs::read_dir(day.path())
                     .ok()?
                     .filter_map(|e| e.ok())
-                    .filter(|e| {
-                        e.path()
-                            .extension()
-                            .is_some_and(|ext| ext == "jsonl")
-                    })
+                    .filter(|e| e.path().extension().is_some_and(|ext| ext == "jsonl"))
                     .collect();
                 files.sort_by_key(|e| std::cmp::Reverse(e.file_name()));
 
@@ -336,10 +331,7 @@ fn find_codex_session(codex_dir: &Path, agent_dir: &Path) -> Option<PathBuf> {
                     if let Ok(content) = std::fs::read_to_string(file.path()) {
                         if let Some(first_line) = content.lines().next() {
                             if let Ok(meta) = serde_json::from_str::<CodexJournalLine>(first_line) {
-                                let cwd = meta
-                                    .payload
-                                    .as_ref()
-                                    .and_then(|p| p.cwd.as_deref());
+                                let cwd = meta.payload.as_ref().and_then(|p| p.cwd.as_deref());
                                 if cwd == Some(&agent_dir.to_string_lossy()) {
                                     return Some(file.path());
                                 }
@@ -485,7 +477,12 @@ mod tests {
     #[test]
     fn claude_resume_session_and_prompt() {
         let p = ClaudeProvider;
-        let cmd = p.build_command(&PathBuf::from("/tmp"), &[], Some("abc-123"), Some("fix the bug"));
+        let cmd = p.build_command(
+            &PathBuf::from("/tmp"),
+            &[],
+            Some("abc-123"),
+            Some("fix the bug"),
+        );
         let args: Vec<_> = cmd.get_args().collect();
         assert_eq!(args, &["--resume", "abc-123", "fix the bug"]);
     }
@@ -685,7 +682,12 @@ mod tests {
     #[test]
     fn codex_resume_session_and_prompt() {
         let p = CodexProvider;
-        let cmd = p.build_command(&PathBuf::from("/tmp"), &[], Some("sess-456"), Some("fix the bug"));
+        let cmd = p.build_command(
+            &PathBuf::from("/tmp"),
+            &[],
+            Some("sess-456"),
+            Some("fix the bug"),
+        );
         let args: Vec<_> = cmd.get_args().collect();
         assert_eq!(args, &["resume", "sess-456", "-C", "/tmp", "fix the bug"]);
     }

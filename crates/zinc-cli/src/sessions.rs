@@ -157,8 +157,7 @@ fn list_codex_sessions(dir: &Path) -> Vec<SessionInfo> {
                     // Check CWD from first line
                     if let Ok(content) = std::fs::read_to_string(&path) {
                         if let Some(first_line) = content.lines().next() {
-                            let Ok(value) =
-                                serde_json::from_str::<serde_json::Value>(first_line)
+                            let Ok(value) = serde_json::from_str::<serde_json::Value>(first_line)
                             else {
                                 continue;
                             };

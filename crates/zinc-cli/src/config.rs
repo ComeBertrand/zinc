@@ -203,9 +203,7 @@ pub fn pick_session(
     }
 
     match trimmed.parse::<usize>() {
-        Ok(n) if n >= 2 && n <= sessions.len() + 1 => {
-            Ok(Some(sessions[n - 2].id.clone()))
-        }
+        Ok(n) if n >= 2 && n <= sessions.len() + 1 => Ok(Some(sessions[n - 2].id.clone())),
         _ => {
             writeln!(writer, "Invalid choice, starting new session.")?;
             Ok(None)
