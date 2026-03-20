@@ -180,6 +180,10 @@ pub struct SessionDisplay {
     pub age: String,
 }
 
+fn format_session_line(s: &SessionDisplay) -> String {
+    format!("[{}] {}", s.age, s.summary)
+}
+
 /// Show a session picker and return the selected session ID, or None for "new".
 /// Uses fzf if available, otherwise falls back to a numbered list.
 pub fn pick_session(sessions: &[SessionDisplay]) -> Result<Option<String>> {
@@ -206,7 +210,7 @@ fn pick_session_fzf(sessions: &[SessionDisplay]) -> Result<Option<String>> {
     let mut fzf_stdin = child.stdin.take().context("failed to open fzf stdin")?;
     writeln!(fzf_stdin, "new session")?;
     for s in sessions {
-        writeln!(fzf_stdin, "{} — {}", s.summary, s.age)?;
+        writeln!(fzf_stdin, "{}", format_session_line(s))?;
     }
     drop(fzf_stdin);
 
@@ -221,10 +225,9 @@ fn pick_session_fzf(sessions: &[SessionDisplay]) -> Result<Option<String>> {
         return Ok(None);
     }
 
-    // Match the selected line back to a session by summary prefix
+    // Match the selected line back to a session
     for s in sessions {
-        let line = format!("{} — {}", s.summary, s.age);
-        if line == choice {
+        if format_session_line(s) == choice {
             return Ok(Some(s.id.clone()));
         }
     }
@@ -241,7 +244,7 @@ pub fn pick_session_fallback(
 ) -> Result<Option<String>> {
     writeln!(writer, "  1) new session (default)")?;
     for (i, s) in sessions.iter().enumerate() {
-        writeln!(writer, "  {}) {} — {}", i + 2, s.summary, s.age)?;
+        writeln!(writer, "  {}) {}", i + 2, format_session_line(s))?;
     }
     write!(writer, "Pick session [1]: ")?;
     writer.flush()?;

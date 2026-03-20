@@ -75,14 +75,14 @@ fn list_claude_sessions(dir: &Path) -> Vec<SessionInfo> {
     sessions
 }
 
-/// Extract the first user message from a Claude JSONL session file.
+/// Extract the last user message from a Claude JSONL session file.
 fn extract_claude_summary(path: &Path) -> String {
     let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
         Err(_) => return "unknown".into(),
     };
 
-    for line in content.lines() {
+    for line in content.lines().rev() {
         // Quick check before parsing
         if !line.contains("\"user\"") {
             continue;
@@ -193,9 +193,9 @@ fn list_codex_sessions(dir: &Path) -> Vec<SessionInfo> {
     sessions
 }
 
-/// Extract the first user message from Codex JSONL content.
+/// Extract the last user message from Codex JSONL content.
 fn extract_codex_summary(content: &str) -> String {
-    for line in content.lines() {
+    for line in content.lines().rev() {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
         };
