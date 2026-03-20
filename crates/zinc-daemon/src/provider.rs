@@ -184,7 +184,7 @@ fn claude_context_usage(pid: u32, dir: &Path) -> Option<ContextUsage> {
 
 fn encode_claude_path(dir: &Path) -> String {
     let s = dir.to_string_lossy();
-    s.replace('/', "-").trim_start_matches('-').to_string()
+    s.replace('/', "-")
 }
 
 fn find_last_usage(content: &str) -> Option<(ClaudeUsage, Option<String>)> {
@@ -608,13 +608,13 @@ mod tests {
     fn encode_claude_path_basic() {
         assert_eq!(
             encode_claude_path(Path::new("/home/user/Workspace/zinc")),
-            "home-user-Workspace-zinc"
+            "-home-user-Workspace-zinc"
         );
     }
 
     #[test]
     fn encode_claude_path_root() {
-        assert_eq!(encode_claude_path(Path::new("/")), "");
+        assert_eq!(encode_claude_path(Path::new("/")), "-");
     }
 
     #[test]

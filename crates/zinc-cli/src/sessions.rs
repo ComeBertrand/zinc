@@ -223,7 +223,7 @@ fn extract_codex_summary(content: &str) -> String {
 /// Encode a directory path the way Claude does: /home/user/foo → home-user-foo
 fn encode_claude_path(dir: &Path) -> String {
     let s = dir.to_string_lossy();
-    s.replace('/', "-").trim_start_matches('-').to_string()
+    s.replace('/', "-")
 }
 
 /// Format a SystemTime as a relative age string.
@@ -259,7 +259,7 @@ mod tests {
     fn encode_path() {
         assert_eq!(
             encode_claude_path(Path::new("/home/user/Workspace/zinc")),
-            "home-user-Workspace-zinc"
+            "-home-user-Workspace-zinc"
         );
     }
 
