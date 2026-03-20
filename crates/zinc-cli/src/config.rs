@@ -180,9 +180,61 @@ pub struct SessionDisplay {
     pub age: String,
 }
 
-/// Show a numbered session picker and return the selected session ID, or None for "new".
+/// Show a session picker and return the selected session ID, or None for "new".
+/// Uses fzf if available, otherwise falls back to a numbered list.
+pub fn pick_session(sessions: &[SessionDisplay]) -> Result<Option<String>> {
+    if let Ok(result) = pick_session_fzf(sessions) {
+        return Ok(result);
+    }
+    let mut stdin = std::io::stdin().lock();
+    let mut stderr = std::io::stderr();
+    pick_session_fallback(&mut stdin, &mut stderr, sessions)
+}
+
+/// Try to pick a session using fzf. Returns Err if fzf is not available.
+fn pick_session_fzf(sessions: &[SessionDisplay]) -> Result<Option<String>> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new("fzf")
+        .args(["--header", "Pick session", "--height", "~50%"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()?;
+
+    let mut fzf_stdin = child.stdin.take().context("failed to open fzf stdin")?;
+    writeln!(fzf_stdin, "new session")?;
+    for s in sessions {
+        writeln!(fzf_stdin, "{} — {}", s.summary, s.age)?;
+    }
+    drop(fzf_stdin);
+
+    let output = child.wait_with_output()?;
+    if !output.status.success() {
+        // User pressed Esc/ctrl-c in fzf — treat as "new session"
+        return Ok(None);
+    }
+
+    let choice = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if choice == "new session" || choice.is_empty() {
+        return Ok(None);
+    }
+
+    // Match the selected line back to a session by summary prefix
+    for s in sessions {
+        let line = format!("{} — {}", s.summary, s.age);
+        if line == choice {
+            return Ok(Some(s.id.clone()));
+        }
+    }
+
+    Ok(None)
+}
+
+/// Fallback numbered list picker when fzf is not available.
 /// `reader` and `writer` are injectable for testing.
-pub fn pick_session(
+pub fn pick_session_fallback(
     reader: &mut dyn std::io::BufRead,
     writer: &mut dyn std::io::Write,
     sessions: &[SessionDisplay],
@@ -607,7 +659,7 @@ unknown_field = "ignored"
         let sessions = make_sessions();
         let mut reader = std::io::Cursor::new(b"\n".to_vec());
         let mut writer = Vec::new();
-        let result = pick_session(&mut reader, &mut writer, &sessions).unwrap();
+        let result = pick_session_fallback(&mut reader, &mut writer, &sessions).unwrap();
         assert!(result.is_none());
     }
 
@@ -616,7 +668,7 @@ unknown_field = "ignored"
         let sessions = make_sessions();
         let mut reader = std::io::Cursor::new(b"1\n".to_vec());
         let mut writer = Vec::new();
-        let result = pick_session(&mut reader, &mut writer, &sessions).unwrap();
+        let result = pick_session_fallback(&mut reader, &mut writer, &sessions).unwrap();
         assert!(result.is_none());
     }
 
@@ -625,7 +677,7 @@ unknown_field = "ignored"
         let sessions = make_sessions();
         let mut reader = std::io::Cursor::new(b"2\n".to_vec());
         let mut writer = Vec::new();
-        let result = pick_session(&mut reader, &mut writer, &sessions).unwrap();
+        let result = pick_session_fallback(&mut reader, &mut writer, &sessions).unwrap();
         assert_eq!(result.as_deref(), Some("sess-1"));
     }
 
@@ -634,7 +686,7 @@ unknown_field = "ignored"
         let sessions = make_sessions();
         let mut reader = std::io::Cursor::new(b"3\n".to_vec());
         let mut writer = Vec::new();
-        let result = pick_session(&mut reader, &mut writer, &sessions).unwrap();
+        let result = pick_session_fallback(&mut reader, &mut writer, &sessions).unwrap();
         assert_eq!(result.as_deref(), Some("sess-2"));
     }
 
@@ -643,7 +695,7 @@ unknown_field = "ignored"
         let sessions = make_sessions();
         let mut reader = std::io::Cursor::new(b"99\n".to_vec());
         let mut writer = Vec::new();
-        let result = pick_session(&mut reader, &mut writer, &sessions).unwrap();
+        let result = pick_session_fallback(&mut reader, &mut writer, &sessions).unwrap();
         assert!(result.is_none());
     }
 }

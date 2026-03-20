@@ -47,9 +47,7 @@ async fn main() -> Result<()> {
                 if found.is_empty() {
                     None
                 } else {
-                    let mut stdin = std::io::stdin().lock();
-                    let mut stderr = std::io::stderr();
-                    config::pick_session(&mut stdin, &mut stderr, &found)?
+                    config::pick_session(&found)?
                 }
             };
 
