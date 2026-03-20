@@ -14,6 +14,7 @@ pub struct SpawnConfig {
     #[serde(alias = "agent")]
     pub default_agent: Option<String>,
     pub namer: Option<String>,
+    pub project_picker: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -29,6 +30,8 @@ pub struct Config {
     /// Command template to derive agent ID from directory.
     /// `{dir}` is replaced with the shell-quoted directory path.
     pub namer: Option<String>,
+    /// Shell command that outputs project paths, one per line (e.g. "yawn list").
+    pub project_picker: Option<String>,
     /// Scrollback buffer size in bytes (default: 1MB).
     pub scrollback: usize,
 }
@@ -38,6 +41,7 @@ impl Default for Config {
         Self {
             default_agent: "claude".into(),
             namer: None,
+            project_picker: None,
             scrollback: 1_048_576,
         }
     }
@@ -55,6 +59,7 @@ pub fn parse_config(toml_str: &str) -> Result<Config> {
         .unwrap_or(defaults.default_agent);
 
     let namer = file.spawn.as_ref().and_then(|s| s.namer.clone());
+    let project_picker = file.spawn.as_ref().and_then(|s| s.project_picker.clone());
 
     let scrollback = file
         .daemon
@@ -65,6 +70,7 @@ pub fn parse_config(toml_str: &str) -> Result<Config> {
     Ok(Config {
         default_agent,
         namer,
+        project_picker,
         scrollback,
     })
 }

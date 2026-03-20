@@ -1,12 +1,82 @@
+use std::path::PathBuf;
 use std::time::Instant;
 
 use zinc_proto::AgentInfo;
+
+pub enum Mode {
+    Normal,
+    SpawnPickProject(PickerState),
+    SpawnEnterPath(String),
+    SpawnPickSession { dir: PathBuf, picker: PickerState },
+}
+
+pub struct PickerItem {
+    pub display: String,
+    pub id: String,
+}
+
+pub struct PickerState {
+    pub title: String,
+    pub items: Vec<PickerItem>,
+    pub filter: String,
+    pub selected: usize,
+}
+
+impl PickerState {
+    pub fn new(title: impl Into<String>, items: Vec<PickerItem>) -> Self {
+        Self {
+            title: title.into(),
+            items,
+            filter: String::new(),
+            selected: 0,
+        }
+    }
+
+    pub fn filtered_items(&self) -> Vec<&PickerItem> {
+        if self.filter.is_empty() {
+            self.items.iter().collect()
+        } else {
+            let lower = self.filter.to_lowercase();
+            self.items
+                .iter()
+                .filter(|item| item.display.to_lowercase().contains(&lower))
+                .collect()
+        }
+    }
+
+    pub fn selected_item(&self) -> Option<&PickerItem> {
+        let filtered = self.filtered_items();
+        filtered.get(self.selected).copied()
+    }
+
+    pub fn select_next(&mut self) {
+        let count = self.filtered_items().len();
+        if count > 0 {
+            self.selected = (self.selected + 1).min(count - 1);
+        }
+    }
+
+    pub fn select_prev(&mut self) {
+        self.selected = self.selected.saturating_sub(1);
+    }
+
+    pub fn type_char(&mut self, c: char) {
+        self.filter.push(c);
+        self.selected = 0;
+    }
+
+    pub fn backspace(&mut self) {
+        self.filter.pop();
+        self.selected = 0;
+    }
+}
 
 pub struct App {
     pub agents: Vec<AgentInfo>,
     pub selected: usize,
     /// Transient status message (errors, confirmations) with expiry time.
     pub status: Option<(String, Instant)>,
+    pub mode: Mode,
 }
 
 impl App {
@@ -15,6 +85,7 @@ impl App {
             agents: Vec::new(),
             selected: 0,
             status: None,
+            mode: Mode::Normal,
         }
     }
 

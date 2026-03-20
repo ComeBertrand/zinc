@@ -2,12 +2,13 @@ mod app;
 mod ui;
 
 use std::io::IsTerminal;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::ExecutableCommand;
 use ratatui::backend::CrosstermBackend;
@@ -15,9 +16,10 @@ use ratatui::Terminal;
 use zinc_proto::{AgentInfo, ServerMessage};
 
 use crate::client::{self, Client};
-use crate::config;
+use crate::config::{self, Config};
+use crate::sessions;
 
-use self::app::App;
+use self::app::{App, Mode, PickerItem, PickerState};
 
 /// Actions returned from the event loop select.
 /// Client-borrowing work (send requests) happens after the select,
@@ -28,8 +30,8 @@ enum Action {
     SelectNext,
     SelectPrev,
     Attach { id: String, provider: String },
-    Spawn,
     Kill { id: String },
+    DoSpawn { dir: PathBuf, resume_session: Option<String> },
 }
 
 pub async fn run() -> Result<()> {
@@ -56,7 +58,7 @@ pub async fn run() -> Result<()> {
     let mut app = App::new();
     app.set_agents(agents);
 
-    let result = run_loop(&mut terminal, &mut app, &mut client, &config.default_agent).await;
+    let result = run_loop(&mut terminal, &mut app, &mut client, &config).await;
 
     // Restore terminal
     terminal::disable_raw_mode()?;
@@ -99,7 +101,7 @@ async fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     app: &mut App,
     client: &mut Client,
-    default_agent: &str,
+    config: &Config,
 ) -> Result<()> {
     let (mut ct_rx, ct_active) = spawn_crossterm_reader();
 
@@ -110,33 +112,8 @@ async fn run_loop(
         let action = tokio::select! {
             Some(ev) = ct_rx.recv() => {
                 match ev {
-                    Event::Key(key) => match (key.code, key.modifiers) {
-                        (KeyCode::Char('q'), _)
-                        | (KeyCode::Char('c'), KeyModifiers::CONTROL) => Action::Quit,
-                        (KeyCode::Char('j') | KeyCode::Down, _) => Action::SelectNext,
-                        (KeyCode::Char('k') | KeyCode::Up, _) => Action::SelectPrev,
-                        (KeyCode::Enter, _) => {
-                            if let Some(agent) = app.selected_agent() {
-                                Action::Attach {
-                                    id: agent.id.clone(),
-                                    provider: agent.provider.clone(),
-                                }
-                            } else {
-                                Action::None
-                            }
-                        }
-                        (KeyCode::Char('n'), _) => Action::Spawn,
-                        (KeyCode::Char('d'), _) => {
-                            if let Some(agent) = app.selected_agent() {
-                                Action::Kill { id: agent.id.clone() }
-                            } else {
-                                Action::None
-                            }
-                        }
-                        _ => Action::None,
-                    },
-                    Event::Resize(_, _) => Action::None, // redraw at top of loop
-                    _ => Action::None,
+                    Event::Key(key) => handle_key_event(key, app, config),
+                    _ => Action::None, // Resize etc. → just redraw
                 }
             }
             msg = client.read_message() => {
@@ -159,8 +136,8 @@ async fn run_loop(
                 ct_active.store(true, Ordering::Relaxed);
                 app.set_agents(fetch_agents(client).await?);
             }
-            Action::Spawn => {
-                spawn_agent(client, app, default_agent).await?;
+            Action::DoSpawn { dir, resume_session } => {
+                do_spawn(client, app, config, dir, resume_session).await?;
                 app.set_agents(fetch_agents(client).await?);
             }
             Action::Kill { id } => {
@@ -170,6 +147,286 @@ async fn run_loop(
             Action::None => {}
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Key event dispatch
+// ---------------------------------------------------------------------------
+
+fn handle_key_event(key: KeyEvent, app: &mut App, config: &Config) -> Action {
+    if matches!(app.mode, Mode::Normal) {
+        handle_normal_key(key, app, config)
+    } else if matches!(app.mode, Mode::SpawnEnterPath(_)) {
+        handle_enter_path_key(key, app, config)
+    } else {
+        handle_picker_key(key, app, config)
+    }
+}
+
+fn handle_normal_key(key: KeyEvent, app: &mut App, config: &Config) -> Action {
+    match (key.code, key.modifiers) {
+        (KeyCode::Char('q'), _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => Action::Quit,
+        (KeyCode::Char('j') | KeyCode::Down, _) => Action::SelectNext,
+        (KeyCode::Char('k') | KeyCode::Up, _) => Action::SelectPrev,
+        (KeyCode::Enter, _) => {
+            if let Some(agent) = app.selected_agent() {
+                Action::Attach {
+                    id: agent.id.clone(),
+                    provider: agent.provider.clone(),
+                }
+            } else {
+                Action::None
+            }
+        }
+        (KeyCode::Char('n'), _) => start_spawn_picker(app, config),
+        (KeyCode::Char('d'), _) => {
+            if let Some(agent) = app.selected_agent() {
+                Action::Kill {
+                    id: agent.id.clone(),
+                }
+            } else {
+                Action::None
+            }
+        }
+        _ => Action::None,
+    }
+}
+
+fn handle_picker_key(key: KeyEvent, app: &mut App, config: &Config) -> Action {
+    match (key.code, key.modifiers) {
+        (KeyCode::Esc, _) => {
+            app.mode = Mode::Normal;
+            Action::None
+        }
+        (KeyCode::Down, _) => {
+            picker_mut(app, PickerState::select_next);
+            Action::None
+        }
+        (KeyCode::Up, _) => {
+            picker_mut(app, PickerState::select_prev);
+            Action::None
+        }
+        (KeyCode::Enter, _) => handle_picker_enter(app, config),
+        (KeyCode::Backspace, _) => {
+            picker_mut(app, PickerState::backspace);
+            Action::None
+        }
+        (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
+            picker_mut(app, |p| p.type_char(c));
+            Action::None
+        }
+        _ => Action::None,
+    }
+}
+
+fn handle_enter_path_key(key: KeyEvent, app: &mut App, config: &Config) -> Action {
+    match (key.code, key.modifiers) {
+        (KeyCode::Esc, _) => {
+            app.mode = Mode::Normal;
+            Action::None
+        }
+        (KeyCode::Enter, _) => {
+            let path = match &app.mode {
+                Mode::SpawnEnterPath(p) => p.clone(),
+                _ => return Action::None,
+            };
+            let dir = PathBuf::from(&path);
+            if !dir.is_dir() {
+                app.set_status(format!("Not a directory: {path}"), Duration::from_secs(3));
+                app.mode = Mode::Normal;
+                return Action::None;
+            }
+            let dir = std::fs::canonicalize(&dir).unwrap_or(dir);
+            transition_to_session_picker(app, config, dir)
+        }
+        (KeyCode::Backspace, _) => {
+            if let Mode::SpawnEnterPath(ref mut path) = app.mode {
+                path.pop();
+            }
+            Action::None
+        }
+        (KeyCode::Char(c), _) => {
+            if let Mode::SpawnEnterPath(ref mut path) = app.mode {
+                path.push(c);
+            }
+            Action::None
+        }
+        _ => Action::None,
+    }
+}
+
+/// Apply a function to the current picker state, if any.
+fn picker_mut(app: &mut App, f: impl FnOnce(&mut PickerState)) {
+    match &mut app.mode {
+        Mode::SpawnPickProject(p) | Mode::SpawnPickSession { picker: p, .. } => f(p),
+        _ => {}
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Spawn picker flow
+// ---------------------------------------------------------------------------
+
+fn start_spawn_picker(app: &mut App, config: &Config) -> Action {
+    if let Some(ref cmd) = config.project_picker {
+        let projects = run_project_picker(cmd);
+        let cwd_display = std::env::current_dir()
+            .ok()
+            .map(|p| ui::shorten_home(&p.display().to_string()))
+            .unwrap_or_else(|| ".".into());
+
+        let mut items = vec![
+            PickerItem {
+                display: format!(". ({cwd_display})"),
+                id: "__cwd__".into(),
+            },
+            PickerItem {
+                display: "enter path...".into(),
+                id: "__enter_path__".into(),
+            },
+        ];
+
+        for path in projects {
+            let display = ui::shorten_home(&path);
+            items.push(PickerItem {
+                display,
+                id: path,
+            });
+        }
+
+        app.mode = Mode::SpawnPickProject(PickerState::new("Pick project", items));
+        Action::None
+    } else {
+        // No project picker configured, use CWD
+        let dir = std::env::current_dir().unwrap_or_default();
+        transition_to_session_picker(app, config, dir)
+    }
+}
+
+fn handle_picker_enter(app: &mut App, config: &Config) -> Action {
+    // Get the selected item's id before transitioning
+    let selected_id = match &app.mode {
+        Mode::SpawnPickProject(p) | Mode::SpawnPickSession { picker: p, .. } => {
+            p.selected_item().map(|item| item.id.clone())
+        }
+        _ => return Action::None,
+    };
+
+    let Some(selected_id) = selected_id else {
+        return Action::None;
+    };
+
+    // Take ownership of mode to transition
+    let mode = std::mem::replace(&mut app.mode, Mode::Normal);
+
+    match mode {
+        Mode::SpawnPickProject(_) => {
+            if selected_id == "__enter_path__" {
+                app.mode = Mode::SpawnEnterPath(String::new());
+                return Action::None;
+            }
+
+            let dir = if selected_id == "__cwd__" {
+                std::env::current_dir().unwrap_or_default()
+            } else {
+                PathBuf::from(&selected_id)
+            };
+            let dir = std::fs::canonicalize(&dir).unwrap_or(dir);
+            transition_to_session_picker(app, config, dir)
+        }
+        Mode::SpawnPickSession { dir, .. } => {
+            let resume_session = if selected_id == "__new__" {
+                None
+            } else {
+                Some(selected_id)
+            };
+            Action::DoSpawn {
+                dir,
+                resume_session,
+            }
+        }
+        _ => Action::None,
+    }
+}
+
+fn transition_to_session_picker(app: &mut App, config: &Config, dir: PathBuf) -> Action {
+    let found = sessions::list_sessions(&config.default_agent, &dir);
+
+    if found.is_empty() {
+        // No sessions, spawn directly
+        return Action::DoSpawn {
+            dir,
+            resume_session: None,
+        };
+    }
+
+    let mut items = vec![PickerItem {
+        display: "new session".into(),
+        id: "__new__".into(),
+    }];
+
+    for s in &found {
+        items.push(PickerItem {
+            display: format!("[{}] {}", s.age, s.summary),
+            id: s.id.clone(),
+        });
+    }
+
+    app.mode = Mode::SpawnPickSession {
+        dir,
+        picker: PickerState::new("Pick session", items),
+    };
+
+    Action::None
+}
+
+fn run_project_picker(command: &str) -> Vec<String> {
+    let output = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .output();
+    match output {
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| l.trim().to_string())
+            .collect(),
+        _ => vec![],
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Agent actions
+// ---------------------------------------------------------------------------
+
+async fn do_spawn(
+    client: &mut Client,
+    app: &mut App,
+    config: &Config,
+    dir: PathBuf,
+    resume_session: Option<String>,
+) -> Result<()> {
+    let id = config::resolve_id(None, config.namer.as_deref(), &dir).ok();
+    let resp = client
+        .send(zinc_proto::Request::Spawn {
+            provider: config.default_agent.clone(),
+            dir: dir.clone(),
+            id,
+            args: vec![],
+            resume_session,
+            prompt: None,
+        })
+        .await?;
+    match resp {
+        zinc_proto::Response::Spawned { id } => {
+            app.set_status(format!("Spawned {id}"), Duration::from_secs(3));
+        }
+        zinc_proto::Response::Error { message } => {
+            app.set_status(format!("Error: {message}"), Duration::from_secs(5));
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 /// Leave the TUI, attach to an agent's PTY with a status bar, then restore the TUI on detach.
@@ -221,30 +478,6 @@ fn draw_status_bar(id: &str, provider: &str, cols: u16, rows: u16) {
     // Move cursor back into scroll region
     let _ = write!(out, "\x1b[1;1H");
     let _ = out.flush();
-}
-
-async fn spawn_agent(client: &mut Client, app: &mut App, default_agent: &str) -> Result<()> {
-    let dir = std::env::current_dir()?;
-    let resp = client
-        .send(zinc_proto::Request::Spawn {
-            provider: default_agent.into(),
-            dir,
-            id: None,
-            args: vec![],
-            resume_session: None,
-            prompt: None,
-        })
-        .await?;
-    match resp {
-        zinc_proto::Response::Spawned { id } => {
-            app.set_status(format!("Spawned {id}"), Duration::from_secs(3));
-        }
-        zinc_proto::Response::Error { message } => {
-            app.set_status(format!("Error: {message}"), Duration::from_secs(5));
-        }
-        _ => {}
-    }
-    Ok(())
 }
 
 async fn kill_agent(client: &mut Client, app: &mut App, id: &str) -> Result<()> {

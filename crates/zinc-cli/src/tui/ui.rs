@@ -1,11 +1,13 @@
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
+use ratatui::widgets::{
+    Block, Borders, Cell, Clear, List, ListItem, Paragraph, Row, Table, TableState,
+};
 use ratatui::Frame;
 use zinc_proto::AgentState;
 
-use super::app::App;
+use super::app::{App, Mode, PickerState};
 
 pub fn render(frame: &mut Frame, app: &mut App) {
     let [header_area, table_area, footer_area] = Layout::vertical([
@@ -24,6 +26,17 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     }
 
     render_footer(frame, footer_area, app);
+
+    // Overlay popups
+    match &app.mode {
+        Mode::Normal => {}
+        Mode::SpawnPickProject(picker) | Mode::SpawnPickSession { picker, .. } => {
+            render_picker_popup(frame, picker);
+        }
+        Mode::SpawnEnterPath(path) => {
+            render_enter_path_popup(frame, path);
+        }
+    }
 }
 
 fn render_header(frame: &mut Frame, area: Rect, app: &App) {
@@ -127,19 +140,110 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &mut App) {
         let line = Line::from(format!(" {msg}")).fg(Color::Yellow);
         frame.render_widget(line, area);
     } else {
-        let line = Line::from(vec![
-            Span::styled(" enter", Style::new().bold()),
-            Span::raw(":attach  "),
-            Span::styled("n", Style::new().bold()),
-            Span::raw(":new  "),
-            Span::styled("d", Style::new().bold()),
-            Span::raw(":kill  "),
-            Span::styled("q", Style::new().bold()),
-            Span::raw(":quit"),
-        ])
-        .fg(Color::DarkGray);
-        frame.render_widget(line, area);
+        let hints = match app.mode {
+            Mode::Normal => vec![
+                Span::styled(" enter", Style::new().bold()),
+                Span::raw(":attach  "),
+                Span::styled("n", Style::new().bold()),
+                Span::raw(":new  "),
+                Span::styled("d", Style::new().bold()),
+                Span::raw(":kill  "),
+                Span::styled("q", Style::new().bold()),
+                Span::raw(":quit"),
+            ],
+            _ => vec![
+                Span::styled(" enter", Style::new().bold()),
+                Span::raw(":select  "),
+                Span::styled("esc", Style::new().bold()),
+                Span::raw(":cancel"),
+            ],
+        };
+        frame.render_widget(Line::from(hints).fg(Color::DarkGray), area);
     }
+}
+
+fn render_picker_popup(frame: &mut Frame, picker: &PickerState) {
+    let area = centered_rect(60, 60, frame.area());
+    frame.render_widget(Clear, area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::new().fg(Color::Cyan))
+        .title(format!(" {} ", picker.title));
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let [filter_area, list_area] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(0),
+    ])
+    .areas(inner);
+
+    // Filter input
+    let filter_line = Line::from(vec![
+        Span::styled("> ", Style::new().fg(Color::Cyan)),
+        Span::raw(&picker.filter),
+        Span::styled("█", Style::new().fg(Color::DarkGray)),
+    ]);
+    frame.render_widget(filter_line, filter_area);
+
+    // Filtered items list
+    let filtered = picker.filtered_items();
+    let items: Vec<ListItem> = filtered
+        .iter()
+        .enumerate()
+        .map(|(i, item)| {
+            let style = if i == picker.selected {
+                Style::new().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::new()
+            };
+            ListItem::new(item.display.as_str()).style(style)
+        })
+        .collect();
+
+    frame.render_widget(List::new(items), list_area);
+}
+
+fn render_enter_path_popup(frame: &mut Frame, path: &str) {
+    let area = centered_rect(60, 20, frame.area());
+    frame.render_widget(Clear, area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::new().fg(Color::Cyan))
+        .title(" Enter path ");
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    // Center the input vertically in the popup
+    let y = inner.y + inner.height / 2;
+    let input_area = Rect::new(inner.x, y, inner.width, 1);
+
+    let input_line = Line::from(vec![
+        Span::styled("> ", Style::new().fg(Color::Cyan)),
+        Span::raw(path),
+        Span::styled("█", Style::new().fg(Color::DarkGray)),
+    ]);
+    frame.render_widget(input_line, input_area);
+}
+
+fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
+    let [_, center_v, _] = Layout::vertical([
+        Constraint::Percentage((100 - percent_y) / 2),
+        Constraint::Percentage(percent_y),
+        Constraint::Percentage((100 - percent_y) / 2),
+    ])
+    .areas(area);
+    let [_, center, _] = Layout::horizontal([
+        Constraint::Percentage((100 - percent_x) / 2),
+        Constraint::Percentage(percent_x),
+        Constraint::Percentage((100 - percent_x) / 2),
+    ])
+    .areas(center_v);
+    center
 }
 
 fn state_display(state: &AgentState) -> (&'static str, Color) {
@@ -167,7 +271,7 @@ fn context_display(pct: Option<u8>) -> Span<'static> {
     }
 }
 
-fn shorten_home(path: &str) -> String {
+pub fn shorten_home(path: &str) -> String {
     if let Ok(home) = std::env::var("HOME") {
         if let Some(rest) = path.strip_prefix(&home) {
             return format!("~{rest}");
