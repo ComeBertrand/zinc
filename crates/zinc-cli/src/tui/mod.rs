@@ -286,11 +286,10 @@ fn start_spawn_picker(app: &mut App, config: &Config) -> Action {
             },
         ];
 
-        for path in projects {
-            let display = ui::shorten_home(&path);
+        for name in projects {
             items.push(PickerItem {
-                display,
-                id: path,
+                display: name.clone(),
+                id: name,
             });
         }
 
@@ -328,6 +327,18 @@ fn handle_picker_enter(app: &mut App, config: &Config) -> Action {
 
             let dir = if selected_id == "__cwd__" {
                 std::env::current_dir().unwrap_or_default()
+            } else if let Some(ref resolver) = config.project_resolver {
+                match config::run_project_resolver(resolver, &selected_id) {
+                    Ok(path) => path,
+                    Err(e) => {
+                        app.set_status(
+                            format!("Resolver failed: {e}"),
+                            Duration::from_secs(5),
+                        );
+                        app.mode = Mode::Normal;
+                        return Action::None;
+                    }
+                }
             } else {
                 PathBuf::from(&selected_id)
             };

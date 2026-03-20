@@ -15,6 +15,7 @@ pub struct SpawnConfig {
     pub default_agent: Option<String>,
     pub namer: Option<String>,
     pub project_picker: Option<String>,
+    pub project_resolver: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -30,8 +31,11 @@ pub struct Config {
     /// Command template to derive agent ID from directory.
     /// `{dir}` is replaced with the shell-quoted directory path.
     pub namer: Option<String>,
-    /// Shell command that outputs project paths, one per line (e.g. "yawn list").
+    /// Shell command that outputs project names/paths, one per line (e.g. "yawn list").
     pub project_picker: Option<String>,
+    /// Shell command to resolve a project name to a path. `{name}` is replaced
+    /// with the selected item. If absent, picker items are used as paths directly.
+    pub project_resolver: Option<String>,
     /// Scrollback buffer size in bytes (default: 1MB).
     pub scrollback: usize,
 }
@@ -42,6 +46,7 @@ impl Default for Config {
             default_agent: "claude".into(),
             namer: None,
             project_picker: None,
+            project_resolver: None,
             scrollback: 1_048_576,
         }
     }
@@ -60,6 +65,10 @@ pub fn parse_config(toml_str: &str) -> Result<Config> {
 
     let namer = file.spawn.as_ref().and_then(|s| s.namer.clone());
     let project_picker = file.spawn.as_ref().and_then(|s| s.project_picker.clone());
+    let project_resolver = file
+        .spawn
+        .as_ref()
+        .and_then(|s| s.project_resolver.clone());
 
     let scrollback = file
         .daemon
@@ -71,6 +80,7 @@ pub fn parse_config(toml_str: &str) -> Result<Config> {
         default_agent,
         namer,
         project_picker,
+        project_resolver,
         scrollback,
     })
 }
@@ -144,6 +154,31 @@ pub fn run_namer(template: &str, dir: &std::path::Path) -> Result<String> {
         anyhow::bail!("namer command produced empty output: {cmd}");
     }
     Ok(name)
+}
+
+/// Run the project resolver command, substituting `{name}` with the shell-quoted name.
+/// Returns the resolved path as a PathBuf.
+pub fn run_project_resolver(template: &str, name: &str) -> Result<std::path::PathBuf> {
+    let cmd = template.replace("{name}", &shell_quote(name));
+    let output = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(&cmd)
+        .output()
+        .with_context(|| format!("failed to run project resolver: {cmd}"))?;
+    if !output.status.success() {
+        anyhow::bail!("project resolver command failed: {cmd}");
+    }
+    let path = String::from_utf8(output.stdout)
+        .context("project resolver produced non-UTF8 output")?
+        .lines()
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if path.is_empty() {
+        anyhow::bail!("project resolver produced empty output: {cmd}");
+    }
+    Ok(std::path::PathBuf::from(path))
 }
 
 /// Resolve the agent ID: explicit flag → namer → directory basename.
