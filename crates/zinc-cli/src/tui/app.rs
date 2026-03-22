@@ -79,6 +79,10 @@ pub struct App {
     pub mode: Mode,
     /// Peek preview content (stripped scrollback text). Some = peek active.
     pub peek: Option<String>,
+    /// Filter text for the agent list. Empty = show all.
+    pub filter: String,
+    /// Whether the user is currently typing into the filter.
+    pub filter_active: bool,
 }
 
 impl App {
@@ -89,6 +93,8 @@ impl App {
             status: None,
             mode: Mode::Normal,
             peek: None,
+            filter: String::new(),
+            filter_active: false,
         }
     }
 
@@ -123,9 +129,27 @@ impl App {
         });
     }
 
+    /// Return agents matching the current filter.
+    pub fn visible_agents(&self) -> Vec<&AgentInfo> {
+        if self.filter.is_empty() {
+            self.agents.iter().collect()
+        } else {
+            let lower = self.filter.to_lowercase();
+            self.agents
+                .iter()
+                .filter(|a| {
+                    a.id.to_lowercase().contains(&lower)
+                        || a.provider.to_lowercase().contains(&lower)
+                        || a.dir.to_string_lossy().to_lowercase().contains(&lower)
+                })
+                .collect()
+        }
+    }
+
     pub fn select_next(&mut self) {
-        if !self.agents.is_empty() {
-            self.selected = (self.selected + 1).min(self.agents.len() - 1);
+        let count = self.visible_agents().len();
+        if count > 0 {
+            self.selected = (self.selected + 1).min(count - 1);
         }
     }
 
@@ -134,14 +158,15 @@ impl App {
     }
 
     pub fn selected_agent(&self) -> Option<&AgentInfo> {
-        self.agents.get(self.selected)
+        self.visible_agents().get(self.selected).copied()
     }
 
     fn clamp_selection(&mut self) {
-        if self.agents.is_empty() {
+        let count = self.visible_agents().len();
+        if count == 0 {
             self.selected = 0;
         } else {
-            self.selected = self.selected.min(self.agents.len() - 1);
+            self.selected = self.selected.min(count - 1);
         }
     }
 

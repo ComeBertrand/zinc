@@ -5,15 +5,18 @@ use ratatui::widgets::{
     Block, Borders, Cell, Clear, List, ListItem, Paragraph, Row, Table, TableState,
 };
 use ratatui::Frame;
-use zinc_proto::AgentState;
+use zinc_proto::{AgentInfo, AgentState};
 
 use super::app::{App, Mode, PickerState};
 
 pub fn render(frame: &mut Frame, app: &mut App) {
+    let show_filter = app.filter_active || !app.filter.is_empty();
+    let filter_height = if show_filter { 1 } else { 0 };
+
     if app.peek.is_some() {
-        // Split layout: table on top, preview on bottom
-        let [header_area, table_area, preview_area, footer_area] = Layout::vertical([
+        let [header_area, filter_area, table_area, preview_area, footer_area] = Layout::vertical([
             Constraint::Length(1),
+            Constraint::Length(filter_height),
             Constraint::Percentage(35),
             Constraint::Min(5),
             Constraint::Length(1),
@@ -21,12 +24,10 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         .areas(frame.area());
 
         render_header(frame, header_area, app);
-
-        if app.agents.is_empty() {
-            render_empty(frame, table_area);
-        } else {
-            render_table(frame, table_area, app);
+        if show_filter {
+            render_filter(frame, filter_area, app);
         }
+        render_agents(frame, table_area, app);
 
         let agent_id = app.selected_agent().map(|a| a.id.as_str()).unwrap_or("—");
         let content = app.peek.as_deref().unwrap_or("");
@@ -34,20 +35,19 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
         render_footer(frame, footer_area, app);
     } else {
-        let [header_area, table_area, footer_area] = Layout::vertical([
+        let [header_area, filter_area, table_area, footer_area] = Layout::vertical([
             Constraint::Length(1),
+            Constraint::Length(filter_height),
             Constraint::Min(0),
             Constraint::Length(1),
         ])
         .areas(frame.area());
 
         render_header(frame, header_area, app);
-
-        if app.agents.is_empty() {
-            render_empty(frame, table_area);
-        } else {
-            render_table(frame, table_area, app);
+        if show_filter {
+            render_filter(frame, filter_area, app);
         }
+        render_agents(frame, table_area, app);
 
         render_footer(frame, footer_area, app);
     }
@@ -61,6 +61,32 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         Mode::SpawnEnterPath(path) => {
             render_enter_path_popup(frame, path);
         }
+    }
+}
+
+fn render_filter(frame: &mut Frame, area: Rect, app: &App) {
+    let mut spans = vec![Span::styled(" /", Style::new().fg(Color::Cyan))];
+    spans.push(Span::raw(&app.filter));
+    if app.filter_active {
+        spans.push(Span::styled("█", Style::new().fg(Color::DarkGray)));
+    }
+    frame.render_widget(Line::from(spans), area);
+}
+
+fn render_agents(frame: &mut Frame, area: Rect, app: &App) {
+    let visible = app.visible_agents();
+    if visible.is_empty() {
+        if app.filter.is_empty() {
+            render_empty(frame, area);
+        } else {
+            let text = Paragraph::new("No matching agents.")
+                .alignment(Alignment::Center)
+                .fg(Color::DarkGray);
+            let y = area.y + area.height / 2;
+            frame.render_widget(text, Rect::new(area.x, y, area.width, 1));
+        }
+    } else {
+        render_table(frame, area, &visible, app.selected);
     }
 }
 
@@ -105,7 +131,7 @@ fn render_empty(frame: &mut Frame, area: Rect) {
     frame.render_widget(text, centered);
 }
 
-fn render_table(frame: &mut Frame, area: Rect, app: &App) {
+fn render_table(frame: &mut Frame, area: Rect, agents: &[&AgentInfo], selected: usize) {
     let header = Row::new([
         Cell::from("STATE"),
         Cell::from("AGENT"),
@@ -118,8 +144,7 @@ fn render_table(frame: &mut Frame, area: Rect, app: &App) {
     .style(Style::new().fg(Color::DarkGray))
     .bottom_margin(0);
 
-    let rows: Vec<Row> = app
-        .agents
+    let rows: Vec<Row> = agents
         .iter()
         .map(|agent| {
             let (icon, color) = state_display(&agent.state);
@@ -152,8 +177,8 @@ fn render_table(frame: &mut Frame, area: Rect, app: &App) {
         .row_highlight_style(Style::new().add_modifier(Modifier::REVERSED));
 
     let mut table_state = TableState::default();
-    if !app.agents.is_empty() {
-        table_state.select(Some(app.selected));
+    if !agents.is_empty() {
+        table_state.select(Some(selected));
     }
 
     frame.render_stateful_widget(table, area, &mut table_state);
@@ -171,6 +196,8 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &mut App) {
                 Span::raw(":attach  "),
                 Span::styled("n", Style::new().bold()),
                 Span::raw(":new  "),
+                Span::styled("/", Style::new().bold()),
+                Span::raw(":filter  "),
                 Span::styled("p", Style::new().bold()),
                 Span::raw(":peek  "),
                 Span::styled("d", Style::new().bold()),

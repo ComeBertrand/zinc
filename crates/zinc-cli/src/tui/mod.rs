@@ -189,6 +189,9 @@ async fn run_loop(
 // ---------------------------------------------------------------------------
 
 fn handle_key_event(key: KeyEvent, app: &mut App, config: &Config) -> Action {
+    if app.filter_active {
+        return handle_filter_key(key, app);
+    }
     if matches!(app.mode, Mode::Normal) {
         handle_normal_key(key, app, config)
     } else if matches!(app.mode, Mode::SpawnEnterPath(_)) {
@@ -213,6 +216,10 @@ fn handle_normal_key(key: KeyEvent, app: &mut App, config: &Config) -> Action {
                 Action::None
             }
         }
+        (KeyCode::Char('/'), _) => {
+            app.filter_active = true;
+            Action::None
+        }
         (KeyCode::Char('n'), _) => start_spawn_picker(app, config),
         (KeyCode::Char('p'), _) => Action::TogglePeek,
         (KeyCode::Char('d'), _) => {
@@ -223,6 +230,37 @@ fn handle_normal_key(key: KeyEvent, app: &mut App, config: &Config) -> Action {
             } else {
                 Action::None
             }
+        }
+        _ => Action::None,
+    }
+}
+
+fn handle_filter_key(key: KeyEvent, app: &mut App) -> Action {
+    match (key.code, key.modifiers) {
+        (KeyCode::Esc, _) => {
+            if app.filter.is_empty() {
+                app.filter_active = false;
+            } else {
+                app.filter.clear();
+                app.selected = 0;
+            }
+            Action::None
+        }
+        (KeyCode::Enter, _) => {
+            app.filter_active = false;
+            Action::None
+        }
+        (KeyCode::Backspace, _) => {
+            app.filter.pop();
+            app.selected = 0;
+            Action::None
+        }
+        (KeyCode::Down, _) => Action::SelectNext,
+        (KeyCode::Up, _) => Action::SelectPrev,
+        (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
+            app.filter.push(c);
+            app.selected = 0;
+            Action::None
         }
         _ => Action::None,
     }
