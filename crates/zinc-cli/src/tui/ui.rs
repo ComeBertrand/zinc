@@ -200,6 +200,8 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &mut App) {
                 Span::raw(":filter  "),
                 Span::styled("p", Style::new().bold()),
                 Span::raw(":peek  "),
+                Span::styled("o", Style::new().bold()),
+                Span::raw(":open  "),
                 Span::styled("d", Style::new().bold()),
                 Span::raw(":kill  "),
                 Span::styled("q", Style::new().bold()),

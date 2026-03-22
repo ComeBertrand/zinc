@@ -1,12 +1,15 @@
+use std::os::unix::process::CommandExt;
+use std::path::PathBuf;
+
 use anyhow::{Context, Result};
 use serde::Deserialize;
-use std::path::PathBuf;
 
 /// Raw TOML shape — all fields optional.
 #[derive(Debug, Deserialize, Default)]
 pub struct ConfigFile {
     pub spawn: Option<SpawnConfig>,
     pub daemon: Option<DaemonConfig>,
+    pub tui: Option<TuiConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -21,6 +24,11 @@ pub struct SpawnConfig {
 #[derive(Debug, Deserialize)]
 pub struct DaemonConfig {
     pub scrollback: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TuiConfig {
+    pub open: Option<String>,
 }
 
 /// Resolved config with defaults applied.
@@ -38,6 +46,9 @@ pub struct Config {
     pub project_resolver: Option<String>,
     /// Scrollback buffer size in bytes (default: 1MB).
     pub scrollback: usize,
+    /// Command template for the TUI "open" action.
+    /// Placeholders: {id}, {dir}, {provider}.
+    pub open: Option<String>,
 }
 
 impl Default for Config {
@@ -48,6 +59,7 @@ impl Default for Config {
             project_picker: None,
             project_resolver: None,
             scrollback: 1_048_576,
+            open: None,
         }
     }
 }
@@ -73,12 +85,15 @@ pub fn parse_config(toml_str: &str) -> Result<Config> {
         .and_then(|d| d.scrollback)
         .unwrap_or(defaults.scrollback);
 
+    let open = file.tui.as_ref().and_then(|t| t.open.clone());
+
     Ok(Config {
         default_agent,
         namer,
         project_picker,
         project_resolver,
         scrollback,
+        open,
     })
 }
 
@@ -101,7 +116,7 @@ pub fn load_config() -> Result<Config> {
 ///
 /// Strings containing only safe characters are returned as-is.
 /// Everything else is wrapped in single quotes with internal `'` escaped.
-fn shell_quote(s: &str) -> String {
+pub(crate) fn shell_quote(s: &str) -> String {
     if s.is_empty() {
         return "''".to_string();
     }
@@ -179,6 +194,52 @@ pub fn run_project_resolver(template: &str, name: &str) -> Result<std::path::Pat
 }
 
 /// Resolve the agent ID: explicit flag → namer → directory basename.
+/// Spawn the open command for the TUI, fully detached from the current process.
+/// Substitutes `{id}`, `{dir}`, `{provider}` placeholders (shell-quoted).
+pub fn run_open_command(
+    template: &str,
+    id: &str,
+    dir: &std::path::Path,
+    provider: &str,
+) -> Result<()> {
+    let dir_str = dir.to_string_lossy();
+    let cmd = template
+        .replace("{id}", &shell_quote(id))
+        .replace("{dir}", &shell_quote(&dir_str))
+        .replace("{provider}", &shell_quote(provider));
+
+    unsafe {
+        std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&cmd)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .pre_exec(|| {
+                nix::unistd::setsid().map_err(|e| std::io::Error::from_raw_os_error(e as i32))?;
+                Ok(())
+            })
+            .spawn()
+            .with_context(|| format!("failed to run open command: {cmd}"))?;
+    }
+    Ok(())
+}
+
+/// Detect the current terminal emulator and return an appropriate open command template.
+/// Returns None if the terminal is not recognized.
+pub fn detect_open_command() -> Option<String> {
+    let term = std::env::var("TERM_PROGRAM").ok()?;
+    let tmpl = match term.as_str() {
+        "kitty" => "kitty --directory {dir} -e zinc attach {id}",
+        "WezTerm" => "wezterm cli spawn --cwd {dir} -- zinc attach {id}",
+        "Alacritty" | "alacritty" => "alacritty --working-directory {dir} -e zinc attach {id}",
+        "ghostty" => "ghostty --working-directory={dir} -e zinc attach {id}",
+        "Apple_Terminal" => "open -a Terminal {dir}",
+        _ => return None,
+    };
+    Some(tmpl.into())
+}
+
 pub fn resolve_id(
     explicit: Option<String>,
     namer: Option<&str>,
