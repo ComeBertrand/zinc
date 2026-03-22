@@ -218,11 +218,12 @@ pub fn find_agents_in_dir(agents: &[zinc_proto::AgentInfo], dir: &std::path::Pat
 pub struct SessionDisplay {
     pub id: String,
     pub summary: String,
+    pub turns: usize,
     pub age: String,
 }
 
 fn format_session_line(s: &SessionDisplay) -> String {
-    format!("[{}] {}", s.age, s.summary)
+    format!("[{}] {} ({} turns)", s.age, s.summary, s.turns)
 }
 
 /// Show a session picker and return the selected session ID, or None for "new".
@@ -687,12 +688,14 @@ unknown_field = "ignored"
         vec![
             SessionDisplay {
                 id: "sess-1".into(),
-                summary: "fix auth bug".into(),
+                summary: "fix-auth-bug".into(),
+                turns: 42,
                 age: "2h ago".into(),
             },
             SessionDisplay {
                 id: "sess-2".into(),
-                summary: "add tests".into(),
+                summary: "add-tests".into(),
+                turns: 15,
                 age: "1d ago".into(),
             },
         ]

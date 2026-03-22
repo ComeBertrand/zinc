@@ -7,6 +7,7 @@ use crate::config::SessionDisplay;
 struct SessionInfo {
     id: String,
     summary: String,
+    turns: usize,
     modified: SystemTime,
 }
 
@@ -22,6 +23,7 @@ pub fn list_sessions(provider: &str, dir: &Path) -> Vec<SessionDisplay> {
         .map(|s| SessionDisplay {
             id: s.id,
             summary: s.summary,
+            turns: s.turns,
             age: format_date(s.modified),
         })
         .collect()
@@ -63,10 +65,11 @@ fn list_claude_sessions(dir: &Path) -> Vec<SessionInfo> {
             .ok()
             .and_then(|m| m.modified().ok())
             .unwrap_or(SystemTime::UNIX_EPOCH);
-        let summary = extract_claude_summary(&path);
+        let (summary, turns) = extract_claude_metadata(&path);
         sessions.push(SessionInfo {
             id,
             summary,
+            turns,
             modified,
         });
     }
@@ -75,40 +78,38 @@ fn list_claude_sessions(dir: &Path) -> Vec<SessionInfo> {
     sessions
 }
 
-/// Extract the last user message from a Claude JSONL session file.
-fn extract_claude_summary(path: &Path) -> String {
+/// Extract custom-title and user turn count from a Claude JSONL session file.
+fn extract_claude_metadata(path: &Path) -> (String, usize) {
     let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
-        Err(_) => return "unknown".into(),
+        Err(_) => return ("unknown".into(), 0),
     };
 
-    for line in content.lines().rev() {
-        // Quick check before parsing
-        if !line.contains("\"user\"") {
-            continue;
-        }
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
-            continue;
-        };
-        if value.get("type").and_then(|t| t.as_str()) != Some("user") {
-            continue;
-        }
-        // Try message.content as a string first, then as an array of content blocks
-        if let Some(msg) = value.get("message") {
-            if let Some(text) = msg.get("content").and_then(|c| c.as_str()) {
-                return truncate(text, 60);
+    let mut title = None;
+    let mut turns = 0;
+
+    for line in content.lines() {
+        // Count user turns
+        if line.contains("\"user\"") {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(line) {
+                if value.get("type").and_then(|t| t.as_str()) == Some("user") {
+                    turns += 1;
+                }
             }
-            if let Some(arr) = msg.get("content").and_then(|c| c.as_array()) {
-                for block in arr {
-                    if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
-                        return truncate(text, 60);
+        }
+        // Extract custom-title (last one wins, they can be updated)
+        if line.contains("\"custom-title\"") {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(line) {
+                if value.get("type").and_then(|t| t.as_str()) == Some("custom-title") {
+                    if let Some(t) = value.get("customTitle").and_then(|t| t.as_str()) {
+                        title = Some(t.to_string());
                     }
                 }
             }
         }
     }
 
-    "unknown".into()
+    (title.unwrap_or_else(|| "untitled".into()), turns)
 }
 
 /// Scan ~/.codex/sessions/ for session files matching the given working directory.
@@ -176,10 +177,11 @@ fn list_codex_sessions(dir: &Path) -> Vec<SessionInfo> {
                                 .ok()
                                 .and_then(|m| m.modified().ok())
                                 .unwrap_or(SystemTime::UNIX_EPOCH);
-                            let summary = extract_codex_summary(&content);
+                            let (summary, turns) = extract_codex_metadata(&content);
                             sessions.push(SessionInfo {
                                 id: stem.to_string(),
                                 summary,
+                                turns,
                                 modified,
                             });
                         }
@@ -193,18 +195,21 @@ fn list_codex_sessions(dir: &Path) -> Vec<SessionInfo> {
     sessions
 }
 
-/// Extract the last user message from Codex JSONL content.
-fn extract_codex_summary(content: &str) -> String {
-    for line in content.lines().rev() {
+/// Extract last user message and user turn count from Codex JSONL content.
+fn extract_codex_metadata(content: &str) -> (String, usize) {
+    let mut last_user_msg = None;
+    let mut turns = 0;
+
+    for line in content.lines() {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
         };
-        // Look for response_item with role "user"
         if value.get("type").and_then(|t| t.as_str()) != Some("response_item") {
             continue;
         }
         if let Some(payload) = value.get("payload") {
             if payload.get("role").and_then(|r| r.as_str()) == Some("user") {
+                turns += 1;
                 if let Some(text) = payload
                     .get("content")
                     .and_then(|c| c.as_array())
@@ -212,12 +217,13 @@ fn extract_codex_summary(content: &str) -> String {
                     .and_then(|b| b.get("text"))
                     .and_then(|t| t.as_str())
                 {
-                    return truncate(text, 60);
+                    last_user_msg = Some(truncate(text, 60));
                 }
             }
         }
     }
-    "unknown".into()
+
+    (last_user_msg.unwrap_or_else(|| "unknown".into()), turns)
 }
 
 /// Encode a directory path the way Claude does: /home/user/foo → home-user-foo
@@ -295,43 +301,48 @@ mod tests {
     }
 
     #[test]
-    fn extract_claude_summary_basic() {
-        let dir = std::env::temp_dir().join("zinc-test-summary-basic");
+    fn extract_claude_metadata_with_title() {
+        let dir = std::env::temp_dir().join("zinc-test-meta-title");
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("test.jsonl");
         std::fs::write(
             &path,
-            r#"{"type":"user","message":{"content":"fix the auth bug"}}"#,
+            r#"{"type":"user","message":{"content":"fix the auth bug"}}
+{"type":"custom-title","customTitle":"fix-auth-bug","sessionId":"abc"}
+{"type":"user","message":{"content":"now add tests"}}"#,
         )
         .unwrap();
-        let result = extract_claude_summary(&path);
+        let (title, turns) = extract_claude_metadata(&path);
         let _ = std::fs::remove_dir_all(&dir);
-        assert_eq!(result, "fix the auth bug");
+        assert_eq!(title, "fix-auth-bug");
+        assert_eq!(turns, 2);
     }
 
     #[test]
-    fn extract_claude_summary_content_blocks() {
-        let dir = std::env::temp_dir().join("zinc-test-summary-blocks");
+    fn extract_claude_metadata_no_title() {
+        let dir = std::env::temp_dir().join("zinc-test-meta-notitle");
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("test.jsonl");
         std::fs::write(
             &path,
-            r#"{"type":"user","message":{"content":[{"type":"text","text":"add tests"}]}}"#,
+            r#"{"type":"user","message":{"content":"hello"}}"#,
         )
         .unwrap();
-        let result = extract_claude_summary(&path);
+        let (title, turns) = extract_claude_metadata(&path);
         let _ = std::fs::remove_dir_all(&dir);
-        assert_eq!(result, "add tests");
+        assert_eq!(title, "untitled");
+        assert_eq!(turns, 1);
     }
 
     #[test]
-    fn extract_claude_summary_empty() {
-        let dir = std::env::temp_dir().join("zinc-test-summary-empty");
+    fn extract_claude_metadata_empty() {
+        let dir = std::env::temp_dir().join("zinc-test-meta-empty");
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("test.jsonl");
         std::fs::write(&path, "").unwrap();
-        let result = extract_claude_summary(&path);
+        let (title, turns) = extract_claude_metadata(&path);
         let _ = std::fs::remove_dir_all(&dir);
-        assert_eq!(result, "unknown");
+        assert_eq!(title, "untitled");
+        assert_eq!(turns, 0);
     }
 }

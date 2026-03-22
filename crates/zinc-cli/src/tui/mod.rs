@@ -342,8 +342,16 @@ fn handle_picker_enter(app: &mut App, config: &Config) -> Action {
             } else {
                 PathBuf::from(&selected_id)
             };
-            let dir = std::fs::canonicalize(&dir).unwrap_or(dir);
-            transition_to_session_picker(app, config, dir)
+            match std::fs::canonicalize(&dir) {
+                Ok(dir) => transition_to_session_picker(app, config, dir),
+                Err(_) => {
+                    app.set_status(
+                        format!("Directory not found: {}", dir.display()),
+                        Duration::from_secs(5),
+                    );
+                    Action::None
+                }
+            }
         }
         Mode::SpawnPickSession { dir, .. } => {
             let resume_session = if selected_id == "__new__" {
@@ -378,7 +386,7 @@ fn transition_to_session_picker(app: &mut App, config: &Config, dir: PathBuf) ->
 
     for s in &found {
         items.push(PickerItem {
-            display: format!("[{}] {}", s.age, s.summary),
+            display: format!("[{}] {} ({} turns)", s.age, s.summary, s.turns),
             id: s.id.clone(),
         });
     }
