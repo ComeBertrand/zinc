@@ -65,10 +65,7 @@ pub fn parse_config(toml_str: &str) -> Result<Config> {
 
     let namer = file.spawn.as_ref().and_then(|s| s.namer.clone());
     let project_picker = file.spawn.as_ref().and_then(|s| s.project_picker.clone());
-    let project_resolver = file
-        .spawn
-        .as_ref()
-        .and_then(|s| s.project_resolver.clone());
+    let project_resolver = file.spawn.as_ref().and_then(|s| s.project_resolver.clone());
 
     let scrollback = file
         .daemon

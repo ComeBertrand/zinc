@@ -29,8 +29,13 @@ enum Action {
     Quit,
     SelectNext,
     SelectPrev,
-    Attach { id: String, provider: String },
-    Kill { id: String },
+    Attach {
+        id: String,
+        provider: String,
+    },
+    Kill {
+        id: String,
+    },
     DoSpawn { dir: PathBuf, resume_session: Option<String> },
 }
 
@@ -136,7 +141,10 @@ async fn run_loop(
                 ct_active.store(true, Ordering::Relaxed);
                 app.set_agents(fetch_agents(client).await?);
             }
-            Action::DoSpawn { dir, resume_session } => {
+            Action::DoSpawn {
+                dir,
+                resume_session,
+            } => {
                 do_spawn(client, app, config, dir, resume_session).await?;
                 app.set_agents(fetch_agents(client).await?);
             }
@@ -331,10 +339,7 @@ fn handle_picker_enter(app: &mut App, config: &Config) -> Action {
                 match config::run_project_resolver(resolver, &selected_id) {
                     Ok(path) => path,
                     Err(e) => {
-                        app.set_status(
-                            format!("Resolver failed: {e}"),
-                            Duration::from_secs(5),
-                        );
+                        app.set_status(format!("Resolver failed: {e}"), Duration::from_secs(5));
                         app.mode = Mode::Normal;
                         return Action::None;
                     }
