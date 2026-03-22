@@ -68,6 +68,10 @@ pub enum Request {
         cols: u16,
         rows: u16,
     },
+    /// Fetch the tail of an agent's scrollback buffer.
+    Scrollback {
+        id: String,
+    },
     /// Hook callback from an agent process (e.g. Claude Code hooks).
     HookEvent {
         agent_id: String,
@@ -83,6 +87,7 @@ pub enum Response {
     Spawned { id: String },
     Agents { agents: Vec<AgentInfo> },
     Attached,
+    Scrollback { data: String },
     Ok,
     Error { message: String },
 }

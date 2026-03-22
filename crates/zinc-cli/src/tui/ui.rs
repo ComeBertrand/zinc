@@ -10,22 +10,47 @@ use zinc_proto::AgentState;
 use super::app::{App, Mode, PickerState};
 
 pub fn render(frame: &mut Frame, app: &mut App) {
-    let [header_area, table_area, footer_area] = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Min(0),
-        Constraint::Length(1),
-    ])
-    .areas(frame.area());
+    if app.peek.is_some() {
+        // Split layout: table on top, preview on bottom
+        let [header_area, table_area, preview_area, footer_area] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Percentage(35),
+            Constraint::Min(5),
+            Constraint::Length(1),
+        ])
+        .areas(frame.area());
 
-    render_header(frame, header_area, app);
+        render_header(frame, header_area, app);
 
-    if app.agents.is_empty() {
-        render_empty(frame, table_area);
+        if app.agents.is_empty() {
+            render_empty(frame, table_area);
+        } else {
+            render_table(frame, table_area, app);
+        }
+
+        let agent_id = app.selected_agent().map(|a| a.id.as_str()).unwrap_or("—");
+        let content = app.peek.as_deref().unwrap_or("");
+        render_preview(frame, preview_area, agent_id, content);
+
+        render_footer(frame, footer_area, app);
     } else {
-        render_table(frame, table_area, app);
-    }
+        let [header_area, table_area, footer_area] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Min(0),
+            Constraint::Length(1),
+        ])
+        .areas(frame.area());
 
-    render_footer(frame, footer_area, app);
+        render_header(frame, header_area, app);
+
+        if app.agents.is_empty() {
+            render_empty(frame, table_area);
+        } else {
+            render_table(frame, table_area, app);
+        }
+
+        render_footer(frame, footer_area, app);
+    }
 
     // Overlay popups
     match &app.mode {
@@ -146,6 +171,8 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &mut App) {
                 Span::raw(":attach  "),
                 Span::styled("n", Style::new().bold()),
                 Span::raw(":new  "),
+                Span::styled("p", Style::new().bold()),
+                Span::raw(":peek  "),
                 Span::styled("d", Style::new().bold()),
                 Span::raw(":kill  "),
                 Span::styled("q", Style::new().bold()),
@@ -159,6 +186,71 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &mut App) {
             ],
         };
         frame.render_widget(Line::from(hints).fg(Color::DarkGray), area);
+    }
+}
+
+fn render_preview(frame: &mut Frame, area: Rect, agent_id: &str, raw_content: &str) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::new().fg(Color::DarkGray))
+        .title(format!(" {agent_id} "));
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    // Feed raw content through vt100 to get a properly rendered screen
+    let mut parser = vt100::Parser::new(inner.height, inner.width, 0);
+    parser.process(raw_content.as_bytes());
+    let screen = parser.screen();
+
+    let lines: Vec<Line> = (0..inner.height)
+        .map(|row| {
+            let mut spans = Vec::new();
+            for col in 0..inner.width {
+                let cell = screen.cell(row, col).unwrap();
+                if cell.is_wide_continuation() {
+                    continue;
+                }
+                let contents = cell.contents();
+                let style = vt100_style_to_ratatui(cell);
+                if contents.is_empty() {
+                    spans.push(Span::styled(" ", style));
+                } else {
+                    spans.push(Span::styled(contents.to_string(), style));
+                }
+            }
+            Line::from(spans)
+        })
+        .collect();
+
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// Convert vt100 cell attributes to a ratatui Style.
+fn vt100_style_to_ratatui(cell: &vt100::Cell) -> Style {
+    let mut style = Style::new();
+    style = style.fg(vt100_color_to_ratatui(cell.fgcolor()));
+    style = style.bg(vt100_color_to_ratatui(cell.bgcolor()));
+    if cell.bold() {
+        style = style.add_modifier(Modifier::BOLD);
+    }
+    if cell.italic() {
+        style = style.add_modifier(Modifier::ITALIC);
+    }
+    if cell.underline() {
+        style = style.add_modifier(Modifier::UNDERLINED);
+    }
+    if cell.inverse() {
+        style = style.add_modifier(Modifier::REVERSED);
+    }
+    style
+}
+
+fn vt100_color_to_ratatui(color: vt100::Color) -> Color {
+    match color {
+        vt100::Color::Default => Color::Reset,
+        vt100::Color::Idx(i) => Color::Indexed(i),
+        vt100::Color::Rgb(r, g, b) => Color::Rgb(r, g, b),
     }
 }
 

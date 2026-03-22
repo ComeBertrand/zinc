@@ -28,6 +28,7 @@ ratatui = { workspace = true }
 crossterm = { workspace = true }
 toml = { workspace = true }
 dirs = { workspace = true }
+vt100 = "0.15"
 
 [build-dependencies]
 clap = { workspace = true }

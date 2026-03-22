@@ -40,6 +40,8 @@ enum Action {
         dir: PathBuf,
         resume_session: Option<String>,
     },
+    TogglePeek,
+    RefreshPeek,
 }
 
 pub async fn run() -> Result<()> {
@@ -112,11 +114,13 @@ async fn run_loop(
     config: &Config,
 ) -> Result<()> {
     let (mut ct_rx, ct_active) = spawn_crossterm_reader();
+    let mut peek_timer = tokio::time::interval(Duration::from_secs(2));
+    peek_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     loop {
         terminal.draw(|frame| ui::render(frame, app))?;
 
-        // Wait for either a crossterm event or a daemon message
+        // Wait for a crossterm event, daemon message, or peek refresh
         let action = tokio::select! {
             Some(ev) = ct_rx.recv() => {
                 match ev {
@@ -131,18 +135,26 @@ async fn run_loop(
                 }
                 Action::None
             }
+            _ = peek_timer.tick(), if app.peek.is_some() => Action::RefreshPeek
         };
 
         // Execute actions that need &mut client (borrow is free after select)
         match action {
             Action::Quit => return Ok(()),
-            Action::SelectNext => app.select_next(),
-            Action::SelectPrev => app.select_prev(),
+            Action::SelectNext => {
+                app.select_next();
+                refresh_peek(client, app).await;
+            }
+            Action::SelectPrev => {
+                app.select_prev();
+                refresh_peek(client, app).await;
+            }
             Action::Attach { id, provider } => {
                 ct_active.store(false, Ordering::Relaxed);
                 attach_agent(terminal, &id, &provider).await?;
                 ct_active.store(true, Ordering::Relaxed);
                 app.set_agents(fetch_agents(client).await?);
+                refresh_peek(client, app).await;
             }
             Action::DoSpawn {
                 dir,
@@ -154,6 +166,18 @@ async fn run_loop(
             Action::Kill { id } => {
                 kill_agent(client, app, &id).await?;
                 app.set_agents(fetch_agents(client).await?);
+                refresh_peek(client, app).await;
+            }
+            Action::TogglePeek => {
+                if app.peek.is_some() {
+                    app.peek = None;
+                } else {
+                    app.peek = Some(String::new());
+                    refresh_peek(client, app).await;
+                }
+            }
+            Action::RefreshPeek => {
+                refresh_peek(client, app).await;
             }
             Action::None => {}
         }
@@ -190,6 +214,7 @@ fn handle_normal_key(key: KeyEvent, app: &mut App, config: &Config) -> Action {
             }
         }
         (KeyCode::Char('n'), _) => start_spawn_picker(app, config),
+        (KeyCode::Char('p'), _) => Action::TogglePeek,
         (KeyCode::Char('d'), _) => {
             if let Some(agent) = app.selected_agent() {
                 Action::Kill {
@@ -419,6 +444,35 @@ fn run_project_picker(command: &str) -> Vec<String> {
             .map(|l| l.trim().to_string())
             .collect(),
         _ => vec![],
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Peek
+// ---------------------------------------------------------------------------
+
+/// Refresh the peek preview content if peek mode is active.
+async fn refresh_peek(client: &mut Client, app: &mut App) {
+    if app.peek.is_none() {
+        return;
+    }
+    if let Some(agent) = app.selected_agent() {
+        let id = agent.id.clone();
+        match fetch_scrollback(client, &id).await {
+            Ok(data) => app.peek = Some(data),
+            Err(e) => app.peek = Some(format!("(error: {e})")),
+        }
+    }
+}
+
+async fn fetch_scrollback(client: &mut Client, id: &str) -> Result<String> {
+    let resp = client
+        .send(zinc_proto::Request::Scrollback { id: id.into() })
+        .await?;
+    match resp {
+        zinc_proto::Response::Scrollback { data } => Ok(data),
+        zinc_proto::Response::Error { message } => anyhow::bail!("{message}"),
+        _ => anyhow::bail!("unexpected response to Scrollback"),
     }
 }
 

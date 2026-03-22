@@ -376,6 +376,7 @@ async fn dispatch(request: Request, state: &Arc<Mutex<DaemonState>>) -> Response
                 id
             ),
         },
+        Request::Scrollback { id } => handle_scrollback(state, &id).await,
         Request::HookEvent { agent_id, event } => handle_hook_event(state, &agent_id, &event).await,
         Request::Shutdown => handle_shutdown(state).await,
     }
@@ -480,6 +481,27 @@ async fn handle_kill(state: &Arc<Mutex<DaemonState>>, id: &str) -> Response {
                 exit_code: -1,
             });
             Response::Ok
+        }
+        None => Response::Error {
+            message: format!("agent '{}' not found", id),
+        },
+    }
+}
+
+async fn handle_scrollback(state: &Arc<Mutex<DaemonState>>, id: &str) -> Response {
+    let state = state.lock().await;
+    match state.agents.get(id) {
+        Some(agent) => {
+            let raw = agent.scrollback_contents();
+            // Return last 64KB as lossy UTF-8 (enough for vt100 to render a full screen)
+            let tail = if raw.len() > 65536 {
+                &raw[raw.len() - 65536..]
+            } else {
+                &raw
+            };
+            Response::Scrollback {
+                data: String::from_utf8_lossy(tail).into_owned(),
+            }
         }
         None => Response::Error {
             message: format!("agent '{}' not found", id),

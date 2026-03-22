@@ -77,6 +77,8 @@ pub struct App {
     /// Transient status message (errors, confirmations) with expiry time.
     pub status: Option<(String, Instant)>,
     pub mode: Mode,
+    /// Peek preview content (stripped scrollback text). Some = peek active.
+    pub peek: Option<String>,
 }
 
 impl App {
@@ -86,6 +88,7 @@ impl App {
             selected: 0,
             status: None,
             mode: Mode::Normal,
+            peek: None,
         }
     }
 
