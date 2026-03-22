@@ -78,7 +78,9 @@ fn list_claude_sessions(dir: &Path) -> Vec<SessionInfo> {
     sessions
 }
 
-/// Extract custom-title and user turn count from a Claude JSONL session file.
+/// Extract session title and user turn count from a Claude JSONL session file.
+/// Uses custom-title if available, otherwise falls back to the first meaningful
+/// user message (skipping tool results and system caveats).
 fn extract_claude_metadata(path: &Path) -> (String, usize) {
     let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
@@ -86,6 +88,7 @@ fn extract_claude_metadata(path: &Path) -> (String, usize) {
     };
 
     let mut title = None;
+    let mut first_user_msg = None;
     let mut turns = 0;
 
     for line in content.lines() {
@@ -94,6 +97,12 @@ fn extract_claude_metadata(path: &Path) -> (String, usize) {
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(line) {
                 if value.get("type").and_then(|t| t.as_str()) == Some("user") {
                     turns += 1;
+                    // Capture first meaningful user message as fallback
+                    if first_user_msg.is_none() {
+                        if let Some(text) = extract_user_text(&value) {
+                            first_user_msg = Some(truncate(&text, 60));
+                        }
+                    }
                 }
             }
         }
@@ -109,7 +118,51 @@ fn extract_claude_metadata(path: &Path) -> (String, usize) {
         }
     }
 
-    (title.unwrap_or_else(|| "untitled".into()), turns)
+    let summary = title
+        .or(first_user_msg)
+        .unwrap_or_else(|| "untitled".into());
+    (summary, turns)
+}
+
+/// Extract the first meaningful text from a user message, skipping tool results
+/// and system caveats that are noise for display purposes.
+fn extract_user_text(value: &serde_json::Value) -> Option<String> {
+    let content = value.get("message")?.get("content")?;
+
+    if let Some(text) = content.as_str() {
+        let text = text.trim();
+        if is_meaningful_text(text) {
+            return Some(text.to_string());
+        }
+    }
+
+    if let Some(arr) = content.as_array() {
+        for block in arr {
+            if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
+                let text = text.trim();
+                if is_meaningful_text(text) {
+                    return Some(text.to_string());
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Check if a user message is meaningful for display (not a tool result or system noise).
+fn is_meaningful_text(text: &str) -> bool {
+    if text.len() < 5 {
+        return false;
+    }
+    // Skip tool results, system caveats, and other noise
+    if text.starts_with('[')
+        || text.starts_with('<')
+        || text.starts_with("The user doesn't want to proceed")
+    {
+        return false;
+    }
+    true
 }
 
 /// Scan ~/.codex/sessions/ for session files matching the given working directory.
@@ -323,10 +376,14 @@ mod tests {
         let dir = std::env::temp_dir().join("zinc-test-meta-notitle");
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("test.jsonl");
-        std::fs::write(&path, r#"{"type":"user","message":{"content":"hello"}}"#).unwrap();
+        std::fs::write(
+            &path,
+            r#"{"type":"user","message":{"content":"fix the login bug"}}"#,
+        )
+        .unwrap();
         let (title, turns) = extract_claude_metadata(&path);
         let _ = std::fs::remove_dir_all(&dir);
-        assert_eq!(title, "untitled");
+        assert_eq!(title, "fix the login bug");
         assert_eq!(turns, 1);
     }
 
