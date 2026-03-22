@@ -323,11 +323,7 @@ mod tests {
         let dir = std::env::temp_dir().join("zinc-test-meta-notitle");
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("test.jsonl");
-        std::fs::write(
-            &path,
-            r#"{"type":"user","message":{"content":"hello"}}"#,
-        )
-        .unwrap();
+        std::fs::write(&path, r#"{"type":"user","message":{"content":"hello"}}"#).unwrap();
         let (title, turns) = extract_claude_metadata(&path);
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(title, "untitled");

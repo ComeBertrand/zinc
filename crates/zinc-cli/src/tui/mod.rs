@@ -36,7 +36,10 @@ enum Action {
     Kill {
         id: String,
     },
-    DoSpawn { dir: PathBuf, resume_session: Option<String> },
+    DoSpawn {
+        dir: PathBuf,
+        resume_session: Option<String>,
+    },
 }
 
 pub async fn run() -> Result<()> {
