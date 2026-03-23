@@ -28,7 +28,21 @@ pub struct DaemonConfig {
 
 #[derive(Debug, Deserialize)]
 pub struct TuiConfig {
-    pub open: Option<String>,
+    #[serde(default)]
+    pub commands: Vec<CustomCommand>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CustomCommand {
+    pub name: String,
+    pub key: String,
+    pub command: String,
+}
+
+impl CustomCommand {
+    pub fn key_char(&self) -> char {
+        self.key.chars().next().unwrap_or('\0')
+    }
 }
 
 /// Resolved config with defaults applied.
@@ -46,9 +60,8 @@ pub struct Config {
     pub project_resolver: Option<String>,
     /// Scrollback buffer size in bytes (default: 1MB).
     pub scrollback: usize,
-    /// Command template for the TUI "open" action.
-    /// Placeholders: {id}, {dir}, {provider}.
-    pub open: Option<String>,
+    /// Custom TUI commands defined in [[tui.commands]].
+    pub commands: Vec<CustomCommand>,
 }
 
 impl Default for Config {
@@ -59,7 +72,7 @@ impl Default for Config {
             project_picker: None,
             project_resolver: None,
             scrollback: 1_048_576,
-            open: None,
+            commands: Vec::new(),
         }
     }
 }
@@ -85,7 +98,12 @@ pub fn parse_config(toml_str: &str) -> Result<Config> {
         .and_then(|d| d.scrollback)
         .unwrap_or(defaults.scrollback);
 
-    let open = file.tui.as_ref().and_then(|t| t.open.clone());
+    let commands = file
+        .tui
+        .as_ref()
+        .map(|t| t.commands.clone())
+        .unwrap_or_default();
+    validate_custom_commands(&commands)?;
 
     Ok(Config {
         default_agent,
@@ -93,7 +111,7 @@ pub fn parse_config(toml_str: &str) -> Result<Config> {
         project_picker,
         project_resolver,
         scrollback,
-        open,
+        commands,
     })
 }
 
@@ -193,10 +211,9 @@ pub fn run_project_resolver(template: &str, name: &str) -> Result<std::path::Pat
     Ok(std::path::PathBuf::from(path))
 }
 
-/// Resolve the agent ID: explicit flag → namer → directory basename.
-/// Spawn the open command for the TUI, fully detached from the current process.
+/// Run a custom TUI command, fully detached from the current process.
 /// Substitutes `{id}`, `{dir}`, `{provider}` placeholders (shell-quoted).
-pub fn run_open_command(
+pub fn run_custom_command(
     template: &str,
     id: &str,
     dir: &std::path::Path,
@@ -220,24 +237,36 @@ pub fn run_open_command(
                 Ok(())
             })
             .spawn()
-            .with_context(|| format!("failed to run open command: {cmd}"))?;
+            .with_context(|| format!("failed to run command: {cmd}"))?;
     }
     Ok(())
 }
 
-/// Detect the current terminal emulator and return an appropriate open command template.
-/// Returns None if the terminal is not recognized.
-pub fn detect_open_command() -> Option<String> {
-    let term = std::env::var("TERM_PROGRAM").ok()?;
-    let tmpl = match term.as_str() {
-        "kitty" => "kitty --directory {dir} -e zinc attach {id}",
-        "WezTerm" => "wezterm cli spawn --cwd {dir} -- zinc attach {id}",
-        "Alacritty" | "alacritty" => "alacritty --working-directory {dir} -e zinc attach {id}",
-        "ghostty" => "ghostty --working-directory={dir} -e zinc attach {id}",
-        "Apple_Terminal" => "open -a Terminal {dir}",
-        _ => return None,
-    };
-    Some(tmpl.into())
+const RESERVED_KEYS: &[char] = &['q', 'j', 'k', 'n', 'p', 'd', '/'];
+
+fn validate_custom_commands(commands: &[CustomCommand]) -> Result<()> {
+    let mut seen = std::collections::HashSet::new();
+    for cmd in commands {
+        if cmd.key.chars().count() != 1 {
+            anyhow::bail!(
+                "custom command '{}': key must be a single character, got '{}'",
+                cmd.name,
+                cmd.key
+            );
+        }
+        let c = cmd.key_char();
+        if RESERVED_KEYS.contains(&c) {
+            anyhow::bail!(
+                "custom command '{}': key '{}' is reserved by a built-in action",
+                cmd.name,
+                cmd.key
+            );
+        }
+        if !seen.insert(c) {
+            anyhow::bail!("custom command '{}': duplicate key '{}'", cmd.name, cmd.key);
+        }
+    }
+    Ok(())
 }
 
 pub fn resolve_id(

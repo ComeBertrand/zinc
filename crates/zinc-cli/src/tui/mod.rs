@@ -40,7 +40,9 @@ enum Action {
         dir: PathBuf,
         resume_session: Option<String>,
     },
-    Open {
+    CustomCommand {
+        name: String,
+        command: String,
         id: String,
         dir: PathBuf,
         provider: String,
@@ -71,6 +73,7 @@ pub async fn run() -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     let mut app = App::new();
+    app.commands = config.commands.clone();
     app.set_agents(agents);
 
     let result = run_loop(&mut terminal, &mut app, &mut client, &config).await;
@@ -173,29 +176,20 @@ async fn run_loop(
                 app.set_agents(fetch_agents(client).await?);
                 refresh_peek(client, app).await;
             }
-            Action::Open { id, dir, provider } => {
-                let template = config
-                    .open
-                    .as_deref()
-                    .map(|s| s.to_string())
-                    .or_else(config::detect_open_command);
-                match template {
-                    Some(tmpl) => match config::run_open_command(&tmpl, &id, &dir, &provider) {
-                        Ok(()) => {
-                            app.set_status(format!("Opened {id}"), Duration::from_secs(3));
-                        }
-                        Err(e) => {
-                            app.set_status(format!("Open failed: {e}"), Duration::from_secs(5));
-                        }
-                    },
-                    None => {
-                        app.set_status(
-                            "Set [tui] open in ~/.config/zinc/config.toml".into(),
-                            Duration::from_secs(5),
-                        );
-                    }
+            Action::CustomCommand {
+                name,
+                command,
+                id,
+                dir,
+                provider,
+            } => match config::run_custom_command(&command, &id, &dir, &provider) {
+                Ok(()) => {
+                    app.set_status(format!("{name}: {id}"), Duration::from_secs(3));
                 }
-            }
+                Err(e) => {
+                    app.set_status(format!("{name} failed: {e}"), Duration::from_secs(5));
+                }
+            },
             Action::TogglePeek => {
                 if app.peek.is_some() {
                     app.peek = None;
@@ -250,21 +244,27 @@ fn handle_normal_key(key: KeyEvent, app: &mut App, config: &Config) -> Action {
         }
         (KeyCode::Char('n'), _) => start_spawn_picker(app, config),
         (KeyCode::Char('p'), _) => Action::TogglePeek,
-        (KeyCode::Char('o'), _) => {
+        (KeyCode::Char('d'), _) => {
             if let Some(agent) = app.selected_agent() {
-                Action::Open {
+                Action::Kill {
                     id: agent.id.clone(),
-                    dir: agent.dir.clone(),
-                    provider: agent.provider.clone(),
                 }
             } else {
                 Action::None
             }
         }
-        (KeyCode::Char('d'), _) => {
-            if let Some(agent) = app.selected_agent() {
-                Action::Kill {
-                    id: agent.id.clone(),
+        (KeyCode::Char(c), _) => {
+            if let Some(cmd) = config.commands.iter().find(|cmd| cmd.key_char() == c) {
+                if let Some(agent) = app.selected_agent() {
+                    Action::CustomCommand {
+                        name: cmd.name.clone(),
+                        command: cmd.command.clone(),
+                        id: agent.id.clone(),
+                        dir: agent.dir.clone(),
+                        provider: agent.provider.clone(),
+                    }
+                } else {
+                    Action::None
                 }
             } else {
                 Action::None

@@ -191,22 +191,29 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &mut App) {
         frame.render_widget(line, area);
     } else {
         let hints = match app.mode {
-            Mode::Normal => vec![
-                Span::styled(" enter", Style::new().bold()),
-                Span::raw(":attach  "),
-                Span::styled("n", Style::new().bold()),
-                Span::raw(":new  "),
-                Span::styled("/", Style::new().bold()),
-                Span::raw(":filter  "),
-                Span::styled("p", Style::new().bold()),
-                Span::raw(":peek  "),
-                Span::styled("o", Style::new().bold()),
-                Span::raw(":open  "),
-                Span::styled("d", Style::new().bold()),
-                Span::raw(":kill  "),
-                Span::styled("q", Style::new().bold()),
-                Span::raw(":quit"),
-            ],
+            Mode::Normal => {
+                let mut hints = vec![
+                    Span::styled(" enter", Style::new().bold()),
+                    Span::raw(":attach  "),
+                    Span::styled("n", Style::new().bold()),
+                    Span::raw(":new  "),
+                    Span::styled("/", Style::new().bold()),
+                    Span::raw(":filter  "),
+                    Span::styled("p", Style::new().bold()),
+                    Span::raw(":peek  "),
+                ];
+                for cmd in &app.commands {
+                    hints.push(Span::styled(cmd.key.clone(), Style::new().bold()));
+                    hints.push(Span::raw(format!(":{} ", cmd.name)));
+                }
+                hints.extend([
+                    Span::styled("d", Style::new().bold()),
+                    Span::raw(":kill  "),
+                    Span::styled("q", Style::new().bold()),
+                    Span::raw(":quit"),
+                ]);
+                hints
+            }
             _ => vec![
                 Span::styled(" enter", Style::new().bold()),
                 Span::raw(":select  "),

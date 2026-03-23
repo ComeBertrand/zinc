@@ -3,6 +3,8 @@ use std::time::Instant;
 
 use zinc_proto::AgentInfo;
 
+use crate::config::CustomCommand;
+
 pub enum Mode {
     Normal,
     SpawnPickProject(PickerState),
@@ -83,6 +85,8 @@ pub struct App {
     pub filter: String,
     /// Whether the user is currently typing into the filter.
     pub filter_active: bool,
+    /// Custom commands from config, displayed in footer and bound to keys.
+    pub commands: Vec<CustomCommand>,
 }
 
 impl App {
@@ -95,6 +99,7 @@ impl App {
             peek: None,
             filter: String::new(),
             filter_active: false,
+            commands: Vec::new(),
         }
     }
 
