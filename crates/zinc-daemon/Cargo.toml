@@ -11,10 +11,6 @@ readme = "../../README.md"
 keywords = ["ai", "agent", "terminal", "multiplexer", "claude"]
 categories = ["command-line-utilities", "development-tools"]
 
-[[bin]]
-name = "zincd"
-path = "src/main.rs"
-
 [dependencies]
 zinc-proto = { workspace = true }
 serde = { workspace = true }

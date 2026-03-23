@@ -28,6 +28,7 @@ async fn main() -> Result<()> {
             id,
             prompt,
             new,
+            attach,
             args,
         } => {
             let dir = std::fs::canonicalize(&dir)
@@ -64,7 +65,12 @@ async fn main() -> Result<()> {
                 .await?;
             match resp {
                 zinc_proto::Response::Spawned { id } => {
-                    println!("Spawned agent: {}", id);
+                    if attach {
+                        let client = client::Client::connect().await?;
+                        client.attach(&id).await?;
+                    } else {
+                        println!("Spawned agent: {}", id);
+                    }
                 }
                 zinc_proto::Response::Error { message } => {
                     eprintln!("Error: {}", message);
@@ -141,6 +147,28 @@ async fn main() -> Result<()> {
 
         Commands::Kill { id } => {
             let mut client = client::Client::connect().await?;
+            let id = match id {
+                Some(id) => id,
+                None => {
+                    let cwd = std::fs::canonicalize(".")
+                        .map_err(|e| anyhow::anyhow!("cannot resolve current directory: {}", e))?;
+                    let resp = client.send(zinc_proto::Request::List).await?;
+                    let agents = match resp {
+                        zinc_proto::Response::Agents { agents } => agents,
+                        _ => anyhow::bail!("unexpected response from daemon"),
+                    };
+                    let matches = config::find_agents_in_dir(&agents, &cwd);
+                    match matches.len() {
+                        0 => anyhow::bail!("no agent running in {}", cwd.display()),
+                        1 => matches.into_iter().next().unwrap(),
+                        _ => anyhow::bail!(
+                            "multiple agents in {}: {}",
+                            cwd.display(),
+                            matches.join(", ")
+                        ),
+                    }
+                }
+            };
             let resp = client
                 .send(zinc_proto::Request::Kill { id: id.clone() })
                 .await?;
@@ -179,6 +207,22 @@ async fn main() -> Result<()> {
                 std::process::exit(1);
             }
         },
+
+        Commands::Daemon => {
+            use tracing_subscriber::EnvFilter;
+            tracing_subscriber::fmt()
+                .with_env_filter(
+                    EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+                )
+                .init();
+            #[cfg(unix)]
+            {
+                let _ = nix::unistd::setsid();
+            }
+            let socket_path = zinc_proto::default_socket_path();
+            let d = zinc_daemon::daemon::Daemon::new(socket_path);
+            return d.run().await;
+        }
 
         Commands::HookNotify { agent, event } => {
             // Not running under zinc — silently succeed so hooks don't block the agent

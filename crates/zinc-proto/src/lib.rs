@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// Protocol version. Increment on any breaking wire format change.
+pub const PROTOCOL_VERSION: u32 = 1;
+
 /// What an agent is doing right now.
 /// Agents that exit (successfully or with error) are cleaned up immediately —
 /// exit is an event, not a state.
@@ -78,6 +81,10 @@ pub enum Request {
         event: String,
     },
     Shutdown,
+    /// Version handshake — sent by client on connect.
+    Hello {
+        protocol_version: u32,
+    },
 }
 
 /// Daemon -> Client response.
@@ -90,6 +97,7 @@ pub enum Response {
     Scrollback { data: String },
     Ok,
     Error { message: String },
+    Hello { protocol_version: u32 },
 }
 
 /// Daemon -> Client pushed event (unsolicited).

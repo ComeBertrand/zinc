@@ -18,6 +18,14 @@ use zinc_proto::{AgentInfo, AgentState};
 use crate::provider::Provider;
 use crate::scrollback::ScrollbackBuffer;
 
+/// Lightweight metadata for context refresh — collected under lock, IO done outside.
+pub struct ContextRefreshJob {
+    pub id: String,
+    pub pid: u32,
+    pub dir: PathBuf,
+    pub provider: String,
+}
+
 pub struct Agent {
     provider: Arc<dyn Provider>,
     dir: PathBuf,
@@ -142,16 +150,34 @@ impl Agent {
 
         // Try graceful shutdown first
         let _ = kill(pid, Signal::SIGTERM);
-        std::thread::sleep(std::time::Duration::from_millis(200));
 
-        match self.child.try_wait() {
-            Ok(Some(_)) => Ok(()),
-            _ => {
-                let _ = kill(pid, Signal::SIGKILL);
-                let _ = self.child.wait();
-                Ok(())
+        // Wait up to 200ms for graceful exit
+        for _ in 0..20 {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            if matches!(self.child.try_wait(), Ok(Some(_))) {
+                return Ok(());
             }
         }
+
+        // Force kill
+        let _ = kill(pid, Signal::SIGKILL);
+
+        // Wait up to 2s for forced exit (handles slow process cleanup)
+        for _ in 0..200 {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            if matches!(self.child.try_wait(), Ok(Some(_))) {
+                return Ok(());
+            }
+        }
+
+        error!(pid = %self.child.id(), "process did not exit after SIGKILL, abandoning");
+        Ok(())
+    }
+
+    /// Kill the agent and drop it. Intended for use in background tasks
+    /// where ownership is transferred (e.g. `spawn_blocking`).
+    pub fn kill_and_drop(mut self) {
+        let _ = self.kill();
     }
 
     /// Set the stored state directly (used by hook-based providers).
@@ -203,13 +229,22 @@ impl Agent {
         }
     }
 
-    /// Recompute context usage from the provider. Returns whether the value changed.
-    pub fn refresh_context_usage(&mut self) -> bool {
-        let old = self.context_percent;
-        if let Some(usage) = self.provider.context_usage(self.child.id(), &self.dir) {
-            self.context_percent = Some(usage.percent());
+    /// Collect lightweight metadata for two-phase context refresh.
+    /// This is cheap (no IO) and can be called under the lock.
+    pub fn context_refresh_job(&self, id: &str) -> ContextRefreshJob {
+        ContextRefreshJob {
+            id: id.to_string(),
+            pid: self.child.id(),
+            dir: self.dir.clone(),
+            provider: self.provider.name().to_string(),
         }
-        self.context_percent != old
+    }
+
+    /// Set context percent. Returns true if the value changed.
+    pub fn set_context_percent(&mut self, pct: Option<u8>) -> bool {
+        let changed = self.context_percent != pct;
+        self.context_percent = pct;
+        changed
     }
 
     pub fn context_percent(&self) -> Option<u8> {

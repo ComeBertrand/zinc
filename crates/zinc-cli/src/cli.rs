@@ -32,6 +32,10 @@ pub enum Commands {
         #[arg(short, long)]
         new: bool,
 
+        /// Attach to the agent immediately after spawning
+        #[arg(short = 'A', long)]
+        attach: bool,
+
         /// Extra arguments passed to the agent command
         #[arg(last = true)]
         args: Vec<String>,
@@ -52,8 +56,8 @@ pub enum Commands {
 
     /// Kill an agent
     Kill {
-        /// Agent ID
-        id: String,
+        /// Agent ID (resolved from current directory if omitted)
+        id: Option<String>,
     },
 
     /// Configure agent hooks for state detection
@@ -69,8 +73,13 @@ pub enum Commands {
     /// Check if the daemon is running
     Status,
 
+    /// Run the daemon (used internally by auto-start)
+    #[command(hide = true)]
+    Daemon,
+
     /// Notify the daemon of a hook event (called by agent hooks).
     /// Silently exits if not running under zinc (no ZINC_AGENT_ID).
+    #[command(hide = true)]
     HookNotify {
         /// Agent ID (defaults to $ZINC_AGENT_ID; exits quietly if absent)
         #[arg(short, long, env = "ZINC_AGENT_ID")]

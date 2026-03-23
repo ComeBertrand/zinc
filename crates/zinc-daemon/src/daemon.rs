@@ -3,6 +3,7 @@ use std::os::fd::OwnedFd;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -26,7 +27,13 @@ struct DaemonState {
     shutdown: bool,
     event_tx: broadcast::Sender<Event>,
     socket_path: PathBuf,
+    connected_clients: Arc<AtomicUsize>,
+    /// When set, the daemon will shut down after this instant if still idle.
+    idle_deadline: Option<Instant>,
 }
+
+/// Default idle timeout before daemon auto-shuts down (seconds).
+const IDLE_TIMEOUT_SECS: u64 = 30;
 
 impl Daemon {
     pub fn new(socket_path: PathBuf) -> Self {
@@ -38,6 +45,8 @@ impl Daemon {
                 shutdown: false,
                 event_tx,
                 socket_path: socket_path.clone(),
+                connected_clients: Arc::new(AtomicUsize::new(0)),
+                idle_deadline: None,
             })),
             socket_path,
         }
@@ -115,7 +124,7 @@ async fn shutdown_signal(state: Arc<Mutex<DaemonState>>) {
 
 /// Background task that periodically checks agents for state changes and exits.
 /// Emits events on the daemon's broadcast channel.
-async fn state_monitor(state: Arc<Mutex<DaemonState>>, notify_config: Option<NotifyConfig>) {
+async fn state_monitor(state_arc: Arc<Mutex<DaemonState>>, notify_config: Option<NotifyConfig>) {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
     let mut context_counter: u32 = 0;
 
@@ -123,7 +132,7 @@ async fn state_monitor(state: Arc<Mutex<DaemonState>>, notify_config: Option<Not
         interval.tick().await;
         context_counter += 1;
 
-        let mut state = state.lock().await;
+        let mut state = state_arc.lock().await;
         if state.shutdown {
             break;
         }
@@ -161,29 +170,74 @@ async fn state_monitor(state: Arc<Mutex<DaemonState>>, notify_config: Option<Not
             let _ = state.event_tx.send(Event::StateChange { id, old, new });
         }
 
-        // Check context usage every 10 seconds
+        // Auto-shutdown: if no agents and no clients, start countdown
+        let has_agents = !state.agents.is_empty();
+        let has_clients = state.connected_clients.load(Ordering::Relaxed) > 0;
+
+        if has_agents || has_clients {
+            state.idle_deadline = None;
+        } else if state.idle_deadline.is_none() {
+            let deadline = Instant::now() + std::time::Duration::from_secs(IDLE_TIMEOUT_SECS);
+            info!("no agents or clients, auto-shutdown in {IDLE_TIMEOUT_SECS}s");
+            state.idle_deadline = Some(deadline);
+        } else if let Some(deadline) = state.idle_deadline {
+            if Instant::now() >= deadline {
+                info!("idle timeout reached, auto-shutting down");
+                state.shutdown = true;
+                break;
+            }
+        }
+
+        // Check context usage every 10 seconds — two-phase to avoid disk IO under lock
         if context_counter >= 10 {
             context_counter = 0;
 
-            let updates: Vec<(String, u8)> = state
+            // Phase 1: collect metadata under lock (cheap)
+            let jobs: Vec<_> = state
                 .agents
-                .iter_mut()
-                .filter_map(|(id, agent)| {
-                    if agent.refresh_context_usage() {
-                        agent.context_percent().map(|pct| (id.clone(), pct))
-                    } else {
-                        None
-                    }
+                .iter()
+                .map(|(id, agent)| agent.context_refresh_job(id))
+                .collect();
+
+            let event_tx = state.event_tx.clone();
+            // Release lock before disk IO
+            drop(state);
+
+            // Phase 2: do file IO outside the lock
+            let results: Vec<_> = jobs
+                .into_iter()
+                .filter_map(|job| {
+                    let usage = provider::resolve(&job.provider).context_usage(job.pid, &job.dir);
+                    usage.map(|u| (job.id, u.percent()))
                 })
                 .collect();
 
-            for (id, pct) in updates {
-                let _ = state.event_tx.send(Event::ContextUpdate {
-                    id,
-                    context_percent: pct,
-                });
+            // Phase 3: write back under lock
+            if !results.is_empty() {
+                let mut state = state_arc.lock().await;
+                for (id, pct) in &results {
+                    if let Some(agent) = state.agents.get_mut(id) {
+                        if agent.set_context_percent(Some(*pct)) {
+                            let _ = event_tx.send(Event::ContextUpdate {
+                                id: id.clone(),
+                                context_percent: *pct,
+                            });
+                        }
+                    }
+                }
             }
         }
+    }
+}
+
+/// Guard that decrements connected_clients on drop.
+struct ClientGuard {
+    counter: Arc<AtomicUsize>,
+}
+
+impl Drop for ClientGuard {
+    fn drop(&mut self) {
+        self.counter.fetch_sub(1, Ordering::Relaxed);
     }
 }
 
@@ -196,6 +250,13 @@ async fn handle_connection(
     state: Arc<Mutex<DaemonState>>,
     mut event_rx: broadcast::Receiver<Event>,
 ) -> Result<()> {
+    // Track connected clients for auto-shutdown
+    let client_counter = state.lock().await.connected_clients.clone();
+    client_counter.fetch_add(1, Ordering::Relaxed);
+    let _guard = ClientGuard {
+        counter: client_counter,
+    };
+
     let (reader, mut writer) = stream.into_split();
     let mut buf_reader = BufReader::new(reader);
     let mut line = String::new();
@@ -379,6 +440,21 @@ async fn dispatch(request: Request, state: &Arc<Mutex<DaemonState>>) -> Response
         Request::Scrollback { id } => handle_scrollback(state, &id).await,
         Request::HookEvent { agent_id, event } => handle_hook_event(state, &agent_id, &event).await,
         Request::Shutdown => handle_shutdown(state).await,
+        Request::Hello { protocol_version } => {
+            if protocol_version == zinc_proto::PROTOCOL_VERSION {
+                Response::Hello {
+                    protocol_version: zinc_proto::PROTOCOL_VERSION,
+                }
+            } else {
+                Response::Error {
+                    message: format!(
+                        "protocol version mismatch: client={}, daemon={}. Run 'zinc shutdown' to restart the daemon.",
+                        protocol_version,
+                        zinc_proto::PROTOCOL_VERSION,
+                    ),
+                }
+            }
+        }
     }
 }
 
@@ -450,11 +526,7 @@ async fn handle_list(state: &Arc<Mutex<DaemonState>>) -> Response {
         state.agents.remove(id);
     }
 
-    // Refresh context usage so clients get fresh data
-    for agent in state.agents.values_mut() {
-        agent.refresh_context_usage();
-    }
-
+    // Use cached context values — background monitor refreshes every 10s
     let agents = state
         .agents
         .iter()
@@ -467,18 +539,16 @@ async fn handle_list(state: &Arc<Mutex<DaemonState>>) -> Response {
 async fn handle_kill(state: &Arc<Mutex<DaemonState>>, id: &str) -> Response {
     let mut state = state.lock().await;
 
-    match state.agents.get_mut(id) {
+    match state.agents.remove(id) {
         Some(agent) => {
-            if let Err(e) = agent.kill() {
-                return Response::Error {
-                    message: format!("failed to kill agent '{}': {}", id, e),
-                };
-            }
-            info!(id = %id, "killed agent");
-            state.agents.remove(id);
+            info!(id = %id, "killing agent");
             let _ = state.event_tx.send(Event::AgentExited {
                 id: id.into(),
                 exit_code: -1,
+            });
+            // Kill process in background — don't block the lock
+            tokio::task::spawn_blocking(move || {
+                agent.kill_and_drop();
             });
             Response::Ok
         }
@@ -535,15 +605,17 @@ async fn handle_hook_event(
 async fn handle_shutdown(state: &Arc<Mutex<DaemonState>>) -> Response {
     let mut state = state.lock().await;
 
-    // Kill all agents
-    let ids: Vec<String> = state.agents.keys().cloned().collect();
-    for id in &ids {
-        if let Some(agent) = state.agents.get_mut(id) {
-            let _ = agent.kill();
-        }
-    }
-    state.agents.clear();
+    // Remove all agents and kill in background
+    let agents: Vec<_> = state.agents.drain().map(|(_, agent)| agent).collect();
     state.shutdown = true;
+
+    if !agents.is_empty() {
+        tokio::task::spawn_blocking(move || {
+            for agent in agents {
+                agent.kill_and_drop();
+            }
+        });
+    }
 
     info!("shutdown requested");
     Response::Ok

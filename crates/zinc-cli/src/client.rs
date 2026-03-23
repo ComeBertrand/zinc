@@ -22,11 +22,13 @@ impl Client {
         match UnixStream::connect(&socket_path).await {
             Ok(stream) => {
                 let (reader, writer) = stream.into_split();
-                Ok(Some(Self {
+                let mut client = Self {
                     reader: BufReader::new(reader),
                     writer,
                     pending_events: Vec::new(),
-                }))
+                };
+                client.handshake().await?;
+                Ok(Some(client))
             }
             Err(_) => Ok(None),
         }
@@ -59,27 +61,45 @@ impl Client {
         };
 
         let (reader, writer) = stream.into_split();
-        Ok(Self {
+        let mut client = Self {
             reader: BufReader::new(reader),
             writer,
             pending_events: Vec::new(),
-        })
+        };
+        client.handshake().await?;
+        Ok(client)
     }
 
-    /// Launch zincd as a background process.
+    /// Perform protocol version handshake with the daemon.
+    async fn handshake(&mut self) -> Result<()> {
+        let resp = self
+            .send(Request::Hello {
+                protocol_version: zinc_proto::PROTOCOL_VERSION,
+            })
+            .await?;
+        match resp {
+            Response::Hello { .. } => Ok(()),
+            Response::Error { message } => {
+                anyhow::bail!("{}", message);
+            }
+            _ => {
+                // Old daemon that doesn't understand Hello — proceed anyway
+                Ok(())
+            }
+        }
+    }
+
+    /// Launch the daemon as a background process (`zinc daemon`).
     fn start_daemon() -> Result<()> {
         use std::process::{Command, Stdio};
 
-        // Look for zincd next to the zinc binary
-        let zincd = std::env::current_exe()?
-            .parent()
-            .map(|p| p.join("zincd"))
-            .unwrap_or_else(|| "zincd".into());
+        let zinc = std::env::current_exe().context("failed to determine current executable")?;
 
         eprintln!("Starting daemon...");
 
         unsafe {
-            Command::new(&zincd)
+            Command::new(&zinc)
+                .arg("daemon")
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
@@ -90,7 +110,7 @@ impl Client {
                     Ok(())
                 })
                 .spawn()
-                .with_context(|| format!("failed to start zincd at {:?}", zincd))?;
+                .with_context(|| format!("failed to start daemon via {:?}", zinc))?;
         }
 
         Ok(())
