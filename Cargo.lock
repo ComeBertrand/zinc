@@ -1415,7 +1415,7 @@ dependencies = [
 
 [[package]]
 name = "zinc-cli"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1438,7 +1438,7 @@ dependencies = [
 
 [[package]]
 name = "zinc-daemon"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "dirs",
@@ -1456,7 +1456,7 @@ dependencies = [
 
 [[package]]
 name = "zinc-proto"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "serde",
  "serde_json",
