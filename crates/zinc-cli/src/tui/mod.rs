@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::ExecutableCommand;
 use ratatui::backend::CrosstermBackend;
@@ -132,8 +132,10 @@ async fn run_loop(
         let action = tokio::select! {
             Some(ev) = ct_rx.recv() => {
                 match ev {
-                    Event::Key(key) => handle_key_event(key, app, config),
-                    _ => Action::None, // Resize etc. → just redraw
+                    Event::Key(key) if key.kind == KeyEventKind::Press => {
+                        handle_key_event(key, app, config)
+                    }
+                    _ => Action::None, // Release, repeat, resize etc. → just redraw
                 }
             }
             msg = client.read_message() => {
@@ -161,6 +163,9 @@ async fn run_loop(
                 ct_active.store(false, Ordering::Relaxed);
                 attach_agent(terminal, &id, &provider).await?;
                 ct_active.store(true, Ordering::Relaxed);
+                // Drain stale events that crossterm may have read during
+                // the terminal state transition (mode resets, screen switches).
+                while ct_rx.try_recv().is_ok() {}
                 app.set_agents(fetch_agents(client).await?);
                 refresh_peek(client, app).await;
             }
@@ -682,3 +687,4 @@ async fn fetch_agents(client: &mut Client) -> Result<Vec<AgentInfo>> {
         _ => anyhow::bail!("unexpected response to List"),
     }
 }
+

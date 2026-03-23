@@ -246,6 +246,13 @@ fn render_preview(frame: &mut Frame, area: Rect, agent_id: &str, raw_content: &s
     let parse_rows = 500_u16;
     let mut parser = vt100::Parser::new(parse_rows, inner.width, 0);
     parser.process(raw_content.as_bytes());
+
+    // If the agent is in alternate screen mode (e.g. Claude Code's TUI),
+    // the main screen content is hidden. Force back to main screen so we
+    // can read the actual output instead of a blank/stale alternate buffer.
+    if parser.screen().alternate_screen() {
+        parser.process(b"\x1b[?1049l");
+    }
     let screen = parser.screen();
 
     // Read all visible rows with styling, then trim trailing blanks
@@ -285,11 +292,9 @@ fn render_preview(frame: &mut Frame, area: Rect, agent_id: &str, raw_content: &s
     frame.render_widget(Paragraph::new(display_lines), inner);
 }
 
-/// Check if a line is visually blank (only spaces/empty with default style).
+/// Check if a line is visually blank (all spans are whitespace-only, regardless of style).
 fn line_is_blank(line: &Line) -> bool {
-    line.spans
-        .iter()
-        .all(|s| s.content.trim().is_empty() && s.style == Style::new())
+    line.spans.iter().all(|s| s.content.trim().is_empty())
 }
 
 /// Convert vt100 cell attributes to a ratatui Style.

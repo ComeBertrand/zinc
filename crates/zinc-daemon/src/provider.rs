@@ -150,17 +150,16 @@ fn claude_context_usage(pid: u32, dir: &Path) -> Option<ContextUsage> {
     let home = std::env::var("HOME").ok()?;
     let claude_dir = PathBuf::from(&home).join(".claude");
 
-    // Read session file: ~/.claude/sessions/<pid>.json → sessionId
-    let session_path = claude_dir.join("sessions").join(format!("{pid}.json"));
-    let session_content = std::fs::read_to_string(&session_path).ok()?;
-    let session: ClaudeSessionFile = serde_json::from_str(&session_content).ok()?;
-
     // Encode directory path the way Claude does: /home/user/foo → -home-user-foo
     let encoded_dir = encode_claude_path(dir);
-    let jsonl_path = claude_dir
-        .join("projects")
-        .join(&encoded_dir)
-        .join(format!("{}.jsonl", session.session_id));
+    let project_dir = claude_dir.join("projects").join(&encoded_dir);
+
+    // Try to find the JSONL via the PID session file first, then fall back
+    // to the most recently modified JSONL in the project directory.
+    // Claude's sessionId in the PID file doesn't always match the JSONL filename
+    // (e.g. when resuming a session, the JSONL keeps its original name).
+    let jsonl_path = claude_session_jsonl_from_pid(pid, &claude_dir, &project_dir)
+        .or_else(|| claude_most_recent_jsonl(&project_dir))?;
 
     // Read JSONL, find last assistant message with usage
     let content = std::fs::read_to_string(&jsonl_path).ok()?;
@@ -180,6 +179,37 @@ fn claude_context_usage(pid: u32, dir: &Path) -> Option<ContextUsage> {
         used_tokens: used,
         limit_tokens: limit,
     })
+}
+
+/// Try to resolve the JSONL path from the PID session file.
+fn claude_session_jsonl_from_pid(
+    pid: u32,
+    claude_dir: &Path,
+    project_dir: &Path,
+) -> Option<PathBuf> {
+    let session_path = claude_dir.join("sessions").join(format!("{pid}.json"));
+    let session_content = std::fs::read_to_string(&session_path).ok()?;
+    let session: ClaudeSessionFile = serde_json::from_str(&session_content).ok()?;
+    let path = project_dir.join(format!("{}.jsonl", session.session_id));
+    if path.exists() {
+        Some(path)
+    } else {
+        None
+    }
+}
+
+/// Fall back to the most recently modified JSONL in the project directory.
+fn claude_most_recent_jsonl(project_dir: &Path) -> Option<PathBuf> {
+    let entries = std::fs::read_dir(project_dir).ok()?;
+    entries
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.path()
+                .extension()
+                .is_some_and(|ext| ext == "jsonl")
+        })
+        .max_by_key(|e| e.metadata().and_then(|m| m.modified()).unwrap_or(std::time::SystemTime::UNIX_EPOCH))
+        .map(|e| e.path())
 }
 
 fn encode_claude_path(dir: &Path) -> String {
