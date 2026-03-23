@@ -6,28 +6,24 @@
 [![crates.io](https://img.shields.io/crates/v/zinc-cli.svg)](https://crates.io/crates/zinc-cli)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Manage AI coding agents as persistent background daemons. Attach, detach, and switch between agent sessions instantly. Think tmux, but purpose-built for AI coding agents.
+Manage AI coding agents as persistent background daemons. Attach, detach, and switch between agent sessions instantly.
 
 **Requires Linux or macOS.** zinc uses Unix PTYs and is not available on Windows.
 
-## Why not tmux?
+## How it works
 
-You can run agents in tmux panes. zinc adds three things tmux can't do:
+zinc runs agents as background daemons — independent of any terminal. The TUI shows all agents and their state. Attach to one for full-screen interaction. Detach to return to the overview. Agents keep running either way.
 
-1. **State awareness** — zinc knows whether an agent is working, waiting for input, or blocked on a permission prompt. tmux just shows you a pane with text.
-2. **Session resume** — zinc integrates with agent session history, letting you resume previous conversations. tmux doesn't know what's running inside it.
-3. **Structured lifecycle** — spawn, kill, and list agents by ID across directories. No manual pane/window management.
-
-If you run one agent at a time, tmux is fine. zinc shines when you're running 3+ agents across worktrees and need to know which ones need you.
+zinc is not a terminal multiplexer. It works inside tmux, zellij, or a bare terminal. It manages agents, not panes.
 
 ## Features
 
 - **Never lose a session** - agents run as background daemons, survive terminal close
-- **TUI supervisor** - full-screen view of all agents, keyboard-driven
-- **Instant switching** - one keystroke to attach/detach from any agent
-- **State tracking** - see at a glance which agents are working, waiting for input, or blocked
+- **Supervisor dashboard** - see all agents at a glance, with live state updates
+- **Pop-in/pop-out** - full-screen attach to any agent, one keystroke to return to the overview
+- **State tracking** - know which agents are working, waiting for input, or blocked on a permission prompt
 - **Session picker** - resume previous sessions or start fresh, with automatic session discovery
-- **Composable** - works with any worktree/project workflow (designed to pair with [yawn](https://github.com/ComeBertrand/yawn))
+- **Composable** - works in any terminal, alongside any workflow
 
 ## Quick start
 
@@ -216,7 +212,7 @@ zinc operates on directories, so it composes naturally with any worktree or proj
 
 ## Architecture
 
-zinc uses a daemon-client architecture (like tmux):
+zinc uses a daemon-client architecture:
 
 - **`zinc daemon`** - long-running daemon that owns agent PTYs, tracks state, broadcasts events
 - **`zinc`** - short-lived client that connects to the daemon via Unix socket
@@ -264,6 +260,16 @@ A man page is generated at build time:
 ```bash
 man target/*/build/zinc-cli-*/out/man/zinc.1
 ```
+
+## FAQ
+
+**Can I use this with tmux/zellij?**
+
+Yes. zinc is a daemon-client tool, not a terminal multiplexer. It works in any terminal, including inside tmux or zellij panes.
+
+**Why not just run agents in tmux panes?**
+
+You can. zinc adds state tracking (which agent needs you?), session resume, and a structured lifecycle (spawn/kill/list by ID). If you run 3+ agents, the supervisor view saves a lot of context-switching.
 
 ## License
 
