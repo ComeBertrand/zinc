@@ -79,13 +79,16 @@ impl Client {
             .await?;
         match resp {
             Response::Hello { .. } => Ok(()),
-            Response::Error { message } => {
+            Response::Error { message } if message.contains("protocol version mismatch") => {
                 anyhow::bail!("{}", message);
             }
-            _ => {
-                // Old daemon that doesn't understand Hello — proceed anyway
-                Ok(())
+            Response::Error { .. } => {
+                // Old daemon that doesn't understand Hello — suggest restart
+                anyhow::bail!(
+                    "daemon is running an older version. Run 'zinc shutdown' then retry."
+                );
             }
+            _ => Ok(()),
         }
     }
 

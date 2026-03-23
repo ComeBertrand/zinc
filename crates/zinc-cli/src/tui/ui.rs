@@ -234,12 +234,23 @@ fn render_preview(frame: &mut Frame, area: Rect, agent_id: &str, raw_content: &s
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    // Feed raw content through vt100 to get a properly rendered screen
-    let mut parser = vt100::Parser::new(inner.height, inner.width, 0);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+
+    // Parse the raw scrollback through a vt100 terminal emulator.
+    // Use a large virtual screen so most content lands in the visible area
+    // (where we can read styled cells), rather than being pushed into
+    // scrollback (which the vt100 crate only exposes as plain text).
+    // The width matches the preview panel so line wrapping is correct.
+    let parse_rows = 500_u16;
+    let mut parser = vt100::Parser::new(parse_rows, inner.width, 0);
     parser.process(raw_content.as_bytes());
     let screen = parser.screen();
 
-    let lines: Vec<Line> = (0..inner.height)
+    // Read all visible rows with styling, then trim trailing blanks
+    // and show the last inner.height rows.
+    let mut all_lines: Vec<Line> = (0..parse_rows)
         .map(|row| {
             let mut spans = Vec::new();
             for col in 0..inner.width {
@@ -250,7 +261,7 @@ fn render_preview(frame: &mut Frame, area: Rect, agent_id: &str, raw_content: &s
                 let contents = cell.contents();
                 let style = vt100_style_to_ratatui(cell);
                 if contents.is_empty() {
-                    spans.push(Span::styled(" ", style));
+                    spans.push(Span::styled(" ".to_string(), style));
                 } else {
                     spans.push(Span::styled(contents.to_string(), style));
                 }
@@ -259,7 +270,26 @@ fn render_preview(frame: &mut Frame, area: Rect, agent_id: &str, raw_content: &s
         })
         .collect();
 
-    frame.render_widget(Paragraph::new(lines), inner);
+    // Trim trailing empty lines
+    while all_lines.last().is_some_and(|l| line_is_blank(l)) {
+        all_lines.pop();
+    }
+
+    // Show the last inner.height lines (bottom of output)
+    let display_lines: Vec<Line> = if all_lines.len() > inner.height as usize {
+        all_lines.split_off(all_lines.len() - inner.height as usize)
+    } else {
+        all_lines
+    };
+
+    frame.render_widget(Paragraph::new(display_lines), inner);
+}
+
+/// Check if a line is visually blank (only spaces/empty with default style).
+fn line_is_blank(line: &Line) -> bool {
+    line.spans
+        .iter()
+        .all(|s| s.content.trim().is_empty() && s.style == Style::new())
 }
 
 /// Convert vt100 cell attributes to a ratatui Style.
