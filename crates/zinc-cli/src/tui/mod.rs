@@ -687,4 +687,3 @@ async fn fetch_agents(client: &mut Client) -> Result<Vec<AgentInfo>> {
         _ => anyhow::bail!("unexpected response to List"),
     }
 }
-

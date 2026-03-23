@@ -203,12 +203,12 @@ fn claude_most_recent_jsonl(project_dir: &Path) -> Option<PathBuf> {
     let entries = std::fs::read_dir(project_dir).ok()?;
     entries
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path()
-                .extension()
-                .is_some_and(|ext| ext == "jsonl")
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "jsonl"))
+        .max_by_key(|e| {
+            e.metadata()
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
         })
-        .max_by_key(|e| e.metadata().and_then(|m| m.modified()).unwrap_or(std::time::SystemTime::UNIX_EPOCH))
         .map(|e| e.path())
 }
 
