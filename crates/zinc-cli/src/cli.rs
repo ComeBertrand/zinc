@@ -14,22 +14,22 @@ pub enum Commands {
     /// Launch a new agent
     Spawn {
         /// Agent tool to use (e.g. claude, codex)
-        #[arg(long)]
+        #[arg(short, long)]
         agent: Option<String>,
 
         /// Working directory for the agent
-        #[arg(long, default_value = ".")]
+        #[arg(short, long, default_value = ".")]
         dir: PathBuf,
 
         /// Agent ID (auto-generated if omitted)
-        #[arg(long)]
+        #[arg(short, long)]
         id: Option<String>,
 
         /// Initial prompt text (e.g. `zinc spawn "Fix this issue ..."`)
         prompt: Option<String>,
 
         /// Skip session picker, always start a new session
-        #[arg(long)]
+        #[arg(short, long)]
         new: bool,
 
         /// Extra arguments passed to the agent command
@@ -40,7 +40,7 @@ pub enum Commands {
     /// List all agents and their states
     List {
         /// Output as JSON
-        #[arg(long)]
+        #[arg(short, long)]
         json: bool,
     },
 
@@ -59,7 +59,7 @@ pub enum Commands {
     /// Configure agent hooks for state detection
     Init {
         /// Agent to configure (e.g. claude)
-        #[arg(long)]
+        #[arg(short, long)]
         agent: String,
     },
 
@@ -73,11 +73,11 @@ pub enum Commands {
     /// Silently exits if not running under zinc (no ZINC_AGENT_ID).
     HookNotify {
         /// Agent ID (defaults to $ZINC_AGENT_ID; exits quietly if absent)
-        #[arg(long, env = "ZINC_AGENT_ID")]
+        #[arg(short, long, env = "ZINC_AGENT_ID")]
         agent: Option<String>,
 
         /// Hook event name (e.g. stop, notification:permission_prompt)
-        #[arg(long)]
+        #[arg(short, long)]
         event: String,
     },
 }
